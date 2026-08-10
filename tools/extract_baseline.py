@@ -13,6 +13,9 @@ def _label(value: object) -> str:
 
 
 def extract_baseline(source: Path, target: Path) -> None:
+    if source.resolve() == target.resolve() or (target.exists() and source.samefile(target)):
+        raise ValueError("source and target must refer to different files")
+
     workbook = load_workbook(source, read_only=True, data_only=True)
     try:
         worksheet = workbook["Sheet1"]
