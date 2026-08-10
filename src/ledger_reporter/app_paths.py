@@ -11,7 +11,7 @@ def app_data_dir() -> Path:
         return Path(override)
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Application Support" / APP_ID
-    return Path(os.getenv("LOCALAPPDATA", Path.home())) / APP_ID
+    return Path(os.getenv("LOCALAPPDATA") or Path.home()) / APP_ID
 
 
 def resource_path(name: str) -> Path:
