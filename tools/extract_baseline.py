@@ -1,5 +1,7 @@
 import argparse
 import json
+import os
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 
@@ -39,7 +41,21 @@ def extract_baseline(source: Path, target: Path) -> None:
         "rows": rows,
     }
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            file.write(json.dumps(payload, ensure_ascii=False, indent=2))
+            file.flush()
+            os.fsync(file.fileno())
+        temporary.replace(target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def main() -> None:

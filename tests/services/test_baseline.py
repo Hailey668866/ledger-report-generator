@@ -1,11 +1,13 @@
 import json
 from datetime import date
 from decimal import Decimal
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
 
+from ledger_reporter.app_paths import resource_path
 from ledger_reporter.services.baseline import load_fy2026_baseline
 from tools.extract_baseline import extract_baseline
 
@@ -41,6 +43,24 @@ def test_loads_fy2026_frozen_baseline() -> None:
         Decimal("729.266484493151"),
     ]
     assert isinstance(baseline.rows[-1]["values"][1], Decimal)
+
+
+def test_fy2026_resource_payload_digest_is_stable() -> None:
+    payload = json.loads(
+        resource_path("fy2026_baseline.json").read_text(encoding="utf-8"),
+        parse_float=str,
+        parse_int=str,
+    )
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    assert sha256(canonical).hexdigest() == (
+        "cdf6e4c04a7d5e54ead23d7493204728af8c35d326b1613a43aa047c3fc6c343"
+    )
 
 
 def test_baseline_loading_does_not_depend_on_current_working_directory(
@@ -100,3 +120,24 @@ def test_extracts_rows_three_through_twenty_eight_to_a_different_target(
         "values": [f"3-{column}" for column in range(2, 12)],
     }
     assert payload["rows"][-1]["label"] == "28-1"
+
+
+def test_replace_failure_preserves_existing_target_and_cleans_temporary_file(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.xlsx"
+    target = tmp_path / "baseline.json"
+    _create_source(source)
+    target.write_text("original", encoding="utf-8")
+
+    def fail_replace(_self: Path, _target: Path) -> Path:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        extract_baseline(source, target)
+
+    assert target.read_text(encoding="utf-8") == "original"
+    assert {path.name for path in tmp_path.iterdir()} == {"source.xlsx", "baseline.json"}
