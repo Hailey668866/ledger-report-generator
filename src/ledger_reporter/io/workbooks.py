@@ -78,17 +78,46 @@ def _header_positions(headers: tuple[object, ...], required_headers: tuple[str, 
     return positions
 
 
-def _rows(worksheet: Worksheet, required_headers: tuple[str, ...]) -> Iterator[dict[str, object]]:
-    row_iterator = worksheet.iter_rows(values_only=True)
+def _validated_rows(
+    cached_sheet: Worksheet,
+    formula_sheet: Worksheet,
+    required_headers: tuple[str, ...],
+    numeric_headers: tuple[str, ...],
+    active_date_header: str,
+) -> Iterator[dict[str, object]]:
+    sheet_name = cached_sheet.title
+    cached_rows = cached_sheet.iter_rows(values_only=True)
+    formula_rows = formula_sheet.iter_rows()
     try:
-        headers = next(row_iterator)
+        cached_headers = next(cached_rows)
+        formula_headers = next(formula_rows)
     except StopIteration:
-        raise WorkbookDataError(f"工作表「{worksheet.title}」为空，无法读取表头。") from None
-    positions = _header_positions(headers, required_headers, worksheet.title)
-    for row in row_iterator:
+        raise WorkbookDataError(f"工作表「{sheet_name}」为空，无法读取表头。") from None
+    cached_positions = _header_positions(cached_headers, required_headers, sheet_name)
+    formula_positions = _header_positions(
+        tuple(cell.value for cell in formula_headers), numeric_headers, sheet_name
+    )
+    cached_numeric_positions = {header: cached_positions[header] for header in numeric_headers}
+    if cached_numeric_positions != formula_positions:
+        raise WorkbookDataError(f"工作表「{sheet_name}」的公式和值视图行结构不一致。")
+
+    missing = object()
+    for cached_row, formula_row in zip_longest(cached_rows, formula_rows, fillvalue=missing):
+        if cached_row is missing or formula_row is missing:
+            raise WorkbookDataError(f"工作表「{sheet_name}」的公式和值视图行结构不一致。")
+        active_date = cached_row[cached_positions[active_date_header]]
+        if active_date is not None and active_date != "":
+            for header, formula_index in formula_positions.items():
+                formula_cell = formula_row[formula_index]
+                cached_value = cached_row[cached_positions[header]]
+                if formula_cell.data_type == "f" and cached_value is None:
+                    raise WorkbookDataError(
+                        f"工作表「{sheet_name}」字段「{header}」的公式没有缓存结果。"
+                        "请用 Excel 或 WPS 重新计算后保存该工作簿，再重新导入。"
+                    )
         yield {
-            header: row[index] if index < len(row) else None
-            for header, index in positions.items()
+            header: cached_row[index] if index < len(cached_row) else None
+            for header, index in cached_positions.items()
         }
 
 
@@ -109,45 +138,6 @@ def _sheet_pair(cached_book, formula_book, path: Path, sheet_name: str):
         raise WorkbookDataError(f"工作簿「{path}」缺少工作表「{sheet_name}」。") from None
 
 
-def _ensure_formula_cache(
-    cached_sheet: Worksheet,
-    formula_sheet: Worksheet,
-    numeric_headers: tuple[str, ...],
-    active_date_header: str,
-) -> None:
-    sheet_name = cached_sheet.title
-    cached_rows = cached_sheet.iter_rows(values_only=True)
-    formula_rows = formula_sheet.iter_rows(values_only=True)
-    try:
-        cached_headers = next(cached_rows)
-        formula_headers = next(formula_rows)
-    except StopIteration:
-        raise WorkbookDataError(f"工作表「{sheet_name}」为空，无法校验公式缓存。") from None
-    cached_positions = _header_positions(cached_headers, numeric_headers, sheet_name)
-    date_position = _header_positions(cached_headers, (active_date_header,), sheet_name)[
-        active_date_header
-    ]
-    formula_positions = _header_positions(formula_headers, numeric_headers, sheet_name)
-    if cached_positions != formula_positions:
-        raise WorkbookDataError(f"工作表「{sheet_name}」的公式和值视图行结构不一致。")
-
-    missing = object()
-    for cached_row, formula_row in zip_longest(cached_rows, formula_rows, fillvalue=missing):
-        if cached_row is missing or formula_row is missing:
-            raise WorkbookDataError(f"工作表「{sheet_name}」的公式和值视图行结构不一致。")
-        active_date = cached_row[date_position] if date_position < len(cached_row) else None
-        if active_date is None or active_date == "":
-            continue
-        for header, index in formula_positions.items():
-            formula = formula_row[index] if index < len(formula_row) else None
-            cached = cached_row[index] if index < len(cached_row) else None
-            if isinstance(formula, str) and formula.startswith("=") and cached is None:
-                raise WorkbookDataError(
-                    f"工作表「{sheet_name}」字段「{header}」的公式没有缓存结果。"
-                    "请用 Excel 或 WPS 重新计算后保存该工作簿，再重新导入。"
-                )
-
-
 def _optional_text(value: object) -> str | None:
     if value is None:
         return None
@@ -160,15 +150,15 @@ def _read_operations(path: Path) -> list[OperationalRecord]:
     cached_book, formula_book = _open_workbook_views(source)
     try:
         worksheet, formula_sheet = _sheet_pair(cached_book, formula_book, source, "台账明细")
-        _ensure_formula_cache(
-            worksheet,
-            formula_sheet,
-            ("预估总应收", "预估毛利润"),
-            "预计起飞时间",
-        )
 
         records: list[OperationalRecord] = []
-        for row in _rows(worksheet, OPS_HEADERS):
+        for row in _validated_rows(
+            worksheet,
+            formula_sheet,
+            OPS_HEADERS,
+            ("预估总应收", "预估毛利润"),
+            "预计起飞时间",
+        ):
             departure_value = row["预计起飞时间"]
             if departure_value is None or departure_value == "":
                 continue
@@ -206,13 +196,13 @@ def _read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
         records: list[FundRecord] = []
         for sheet_name in selected_sheets:
             worksheet, formula_sheet = _sheet_pair(cached_book, formula_book, source, sheet_name)
-            _ensure_formula_cache(
+            for row in _validated_rows(
                 worksheet,
                 formula_sheet,
+                FUND_HEADERS,
                 ("付款金额合计（90%）", "应收操作费"),
                 "信容付款日期",
-            )
-            for row in _rows(worksheet, FUND_HEADERS):
+            ):
                 payment_date = row["信容付款日期"]
                 if payment_date is None or payment_date == "":
                     continue

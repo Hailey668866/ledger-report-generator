@@ -5,6 +5,7 @@ from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook, load_workbook
+from openpyxl.worksheet.formula import ArrayFormula
 
 from ledger_reporter.io import workbooks
 from ledger_reporter.io.errors import WorkbookDataError
@@ -257,6 +258,23 @@ def test_read_operations_rejects_formula_without_cached_result(tmp_path: Path) -
         OPS_HEADERS,
         [("B-1", "散板", "LAX", "2026-08-02", "供应商 A", 100, "=1+1")],
     )
+
+    with pytest.raises(WorkbookDataError, match="公式没有缓存结果"):
+        read_operations(path)
+
+
+def test_read_operations_rejects_array_formula_without_cached_result(tmp_path: Path) -> None:
+    path = tmp_path / "operations.xlsx"
+    save_book(
+        path,
+        "台账明细",
+        OPS_HEADERS,
+        [("B-1", "散板", "LAX", "2026-08-02", "供应商 A", 100, 10)],
+    )
+    workbook = load_workbook(path)
+    workbook["台账明细"]["G2"] = ArrayFormula(ref="G2", text="=1+1")
+    workbook.save(path)
+    workbook.close()
 
     with pytest.raises(WorkbookDataError, match="公式没有缓存结果"):
         read_operations(path)
