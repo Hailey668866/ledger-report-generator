@@ -7,6 +7,8 @@ from ledger_reporter.domain.models import OperationalRecord, ReportingPeriod
 from ledger_reporter.services.calculations import calculate_business_table
 
 PERIOD = ReportingPeriod(date(2026, 8, 1), date(2026, 8, 7), "W1（8.1-8.7）")
+OUZHANG = "欧展国际货运（上海）有限公司北京货运代理分公司"
+YINHUA = "上海印华国际货运代理有限公司深圳分公司"
 EXPECTED_ROW_NAMES = (
     "WWP",
     "欧展-固定位（LAX）",
@@ -50,14 +52,14 @@ def operation(
         (
             "欧展-固定位（LAX）",
             {
-                "supplier": "欧展国际货运（上海）有限公司北京货运代理分公司",
+                "supplier": OUZHANG,
                 "project_type": "BSA-欧展",
             },
         ),
         (
             "欧展-差价",
             {
-                "supplier": "欧展国际货运（上海）有限公司北京货运代理分公司",
+                "supplier": OUZHANG,
                 "project_type": "差价-欧展",
             },
         ),
@@ -66,21 +68,21 @@ def operation(
         (
             "印华固定位OSL",
             {
-                "supplier": "上海印华国际货运代理有限公司深圳分公司",
+                "supplier": YINHUA,
                 "destination": "OSL",
             },
         ),
         (
             "印华固定位ORD",
             {
-                "supplier": "上海印华国际货运代理有限公司深圳分公司",
+                "supplier": YINHUA,
                 "destination": "ORD",
             },
         ),
         (
             "印华固定位LGG",
             {
-                "supplier": "上海印华国际货运代理有限公司深圳分公司",
+                "supplier": YINHUA,
                 "destination": "LGG",
             },
         ),
@@ -99,6 +101,58 @@ def test_each_business_rule_selects_its_matching_operation(
         1,
         Decimal(10),
         Decimal(100),
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "supplier", "project_type"),
+    [
+        ("欧展-固定位（LAX）", "其他供应商", "BSA-欧展"),
+        ("欧展-固定位（LAX）", OUZHANG, "其他项目类型"),
+        ("欧展-差价", "其他供应商", "差价-欧展"),
+        ("欧展-差价", OUZHANG, "其他项目类型"),
+    ],
+)
+def test_ouzhang_rules_require_both_supplier_and_project_type(
+    name: str, supplier: str, project_type: str
+) -> None:
+    table = calculate_business_table(
+        PERIOD,
+        [operation(supplier=supplier, project_type=project_type)],
+    )
+
+    metric = next(row for row in table.rows if row.name == name)
+    assert (metric.count, metric.profit, metric.receivable) == (
+        0,
+        Decimal(0),
+        Decimal(0),
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "supplier", "destination"),
+    [
+        ("印华固定位OSL", "其他供应商", "OSL"),
+        ("印华固定位OSL", YINHUA, "其他目的地"),
+        ("印华固定位ORD", "其他供应商", "ORD"),
+        ("印华固定位ORD", YINHUA, "其他目的地"),
+        ("印华固定位LGG", "其他供应商", "LGG"),
+        ("印华固定位LGG", YINHUA, "其他目的地"),
+    ],
+)
+def test_yinhua_rules_require_both_supplier_and_destination(
+    name: str, supplier: str, destination: str
+) -> None:
+    table = calculate_business_table(
+        PERIOD,
+        [operation(supplier=supplier, destination=destination)],
+    )
+
+    metric = next(row for row in table.rows if row.name == name)
+    assert (metric.count, metric.profit, metric.receivable) == (
+        0,
+        Decimal(0),
+        Decimal(0),
     )
 
 
@@ -154,7 +208,7 @@ def test_total_uses_all_period_operations_once_instead_of_summing_business_rows(
         bill_no="overlap",
         project_type="散采",
         destination="OSL",
-        supplier="上海印华国际货运代理有限公司深圳分公司",
+        supplier=YINHUA,
         receivable="300",
         profit="30",
     )
