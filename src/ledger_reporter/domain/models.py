@@ -13,6 +13,19 @@ class ReportingPeriod:
 
 
 @dataclass(frozen=True, slots=True)
+class UpdatePlan:
+    latest: ReportingPeriod
+    new_periods: tuple[ReportingPeriod, ...]
+    refresh_periods: tuple[ReportingPeriod, ...]
+
+    @property
+    def periods(self) -> tuple[ReportingPeriod, ...]:
+        return tuple(
+            sorted(set(self.new_periods + self.refresh_periods), key=lambda item: item.start)
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class OperationalRecord:
     bill_no: str | None
     project_type: str | None
