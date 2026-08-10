@@ -1,5 +1,6 @@
 .artifact-analysis/
 .superpowers/
+.worktrees/
 .venv/
 __pycache__/
 .pytest_cache/
