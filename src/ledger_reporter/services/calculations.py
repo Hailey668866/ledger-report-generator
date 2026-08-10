@@ -27,7 +27,9 @@ def calculate_period(
         record for record in funds if period.start <= record.payment_date <= period.end
     ]
 
-    unknown_channels = sorted({record.channel for record in selected_funds if record.channel not in FUND_RATES})
+    unknown_channels = sorted(
+        {record.channel or "<空白>" for record in selected_funds if record.channel not in FUND_RATES}
+    )
     if unknown_channels:
         raise WorkbookDataError(f"未知资金渠道：{', '.join(unknown_channels)}")
 

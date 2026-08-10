@@ -42,6 +42,52 @@ def test_rejects_unknown_fund_channel() -> None:
         calculate_period(PERIOD, [], funds)
 
 
+def test_identifies_blank_fund_channel() -> None:
+    funds = [FundRecord("", date(2026, 8, 4), Decimal(100), Decimal(0))]
+
+    with pytest.raises(WorkbookDataError, match="<空白>"):
+        calculate_period(PERIOD, [], funds)
+
+
+def test_empty_inputs_return_zero_core_metrics() -> None:
+    metrics = calculate_period(PERIOD, [], [])
+
+    assert metrics.project_count == 0
+    assert metrics.project_profit == Decimal(0)
+    assert metrics.scatter_count == 0
+    assert metrics.scatter_profit == Decimal(0)
+    assert metrics.fund_amount == Decimal(0)
+    assert metrics.fund_profit == Decimal(0)
+    assert isinstance(metrics.project_count, int)
+    assert isinstance(metrics.scatter_count, int)
+    assert all(
+        isinstance(value, Decimal)
+        for value in (
+            metrics.project_profit,
+            metrics.scatter_profit,
+            metrics.fund_amount,
+            metrics.fund_profit,
+        )
+    )
+
+
+def test_accepts_single_use_iterators() -> None:
+    funds = [
+        FundRecord(
+            "广州美鑫通国际供应链有限公司", date(2026, 8, 4), Decimal(100), Decimal(20)
+        )
+    ]
+
+    metrics = calculate_period(PERIOD, iter([op("BSA", "10")]), iter(funds))
+
+    assert metrics.project_count == 1
+    assert metrics.project_profit == Decimal(10)
+    assert metrics.fund_amount == Decimal(100)
+    assert metrics.fund_profit == (
+        Decimal(100) * Decimal("0.0552") * Decimal(60) / Decimal(365) + Decimal(20)
+    )
+
+
 def test_uses_inclusive_dates_and_both_configured_fund_rates() -> None:
     operations = [
         OperationalRecord("start", "项目", "OSL", date(2026, 8, 1), "供应商", Decimal(1), Decimal(2)),
