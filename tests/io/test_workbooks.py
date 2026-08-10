@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from openpyxl import Workbook
@@ -91,6 +92,15 @@ def test_read_operations_rejects_duplicate_required_header(tmp_path: Path) -> No
 def test_read_operations_rejects_corrupt_xlsx(tmp_path: Path) -> None:
     path = tmp_path / "operations.xlsx"
     path.write_bytes(b"not an xlsx workbook")
+
+    with pytest.raises(WorkbookDataError, match="不是有效的 XLSX"):
+        read_operations(path)
+
+
+def test_read_operations_rejects_zip_without_ooxml_parts(tmp_path: Path) -> None:
+    path = tmp_path / "operations.xlsx"
+    with ZipFile(path, "w") as archive:
+        archive.writestr("dummy.txt", "not an OOXML workbook")
 
     with pytest.raises(WorkbookDataError, match="不是有效的 XLSX"):
         read_operations(path)

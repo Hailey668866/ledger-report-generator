@@ -34,7 +34,7 @@ def _open_workbook(path: Path, data_only: bool):
         raise WorkbookDataError(f"找不到工作簿文件「{source}」。")
     try:
         return load_workbook(source, read_only=True, data_only=data_only, keep_links=False)
-    except (BadZipFile, InvalidFileException):
+    except (BadZipFile, InvalidFileException, KeyError):
         raise WorkbookDataError(f"文件「{source}」不是有效的 XLSX 工作簿。") from None
     except OSError as error:
         raise WorkbookDataError(f"无法读取工作簿「{source}」：{error}") from None
