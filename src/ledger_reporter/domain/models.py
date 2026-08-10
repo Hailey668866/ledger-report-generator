@@ -64,3 +64,10 @@ class BusinessMetric:
     @property
     def margin(self) -> Decimal | None:
         return None if self.receivable == ZERO else self.profit / self.receivable
+
+
+@dataclass(frozen=True, slots=True)
+class BusinessTable:
+    period: ReportingPeriod
+    rows: tuple[BusinessMetric, ...]
+    total: BusinessMetric
