@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ledger_reporter.domain.models import PeriodMetrics, ReportingPeriod, WeekSnapshot
-from ledger_reporter.services.history import HistoryRepository
+from ledger_reporter.services.history import HistoryDataError, HistoryRepository
 
 
 def _snapshot(
@@ -38,6 +39,15 @@ def _generation(
         {"name": "operations.xlsx", "marker": marker, "rows": 34},
         connection,
     )
+
+
+def _execute_raw(database_path: Path, statement: str, parameters: tuple[object, ...]) -> None:
+    connection = sqlite3.connect(database_path)
+    try:
+        connection.execute(statement, parameters)
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def test_upsert_replaces_label_and_every_metric_without_duplicate(tmp_path: Path) -> None:
@@ -141,6 +151,41 @@ def test_round_trips_all_metrics_and_decimal_text_precision(tmp_path: Path) -> N
     assert str(loaded.metrics.card_profit) == "42.000"
 
 
+def test_corrupt_week_metric_raises_repository_error_with_record_context(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "history.sqlite3"
+    repository = HistoryRepository(database_path)
+    week = _snapshot(
+        2026,
+        date(2026, 8, 1),
+        date(2026, 8, 6),
+        "W1",
+        PeriodMetrics(project_profit=Decimal("12.34")),
+    )
+    repository.save_weeks([week])
+    _execute_raw(
+        database_path,
+        """
+        UPDATE week_snapshots
+        SET project_profit = ?
+        WHERE fiscal_year = ? AND start_date = ? AND end_date = ?
+        """,
+        ("not-a-decimal", 2026, "2026-08-01", "2026-08-06"),
+    )
+
+    with pytest.raises(HistoryDataError) as raised:
+        repository.load_weeks(2026)
+
+    assert raised.value.__cause__ is not None
+    message = str(raised.value).lower()
+    assert str(database_path).lower() in message
+    assert "fiscal_year=2026" in message
+    assert "2026-08-01" in message
+    assert "2026-08-06" in message
+    assert "week snapshot" in message
+
+
 def test_load_weeks_sorts_by_start_date_and_empty_year_returns_empty_list(
     tmp_path: Path,
 ) -> None:
@@ -155,6 +200,22 @@ def test_load_weeks_sorts_by_start_date_and_empty_year_returns_empty_list(
 
     assert [item.period.label for item in repository.load_weeks(2026)] == ["W1", "W2", "W3"]
     assert repository.load_weeks(2099) == []
+
+
+def test_owned_save_rolls_back_first_insert_when_later_binding_fails(tmp_path: Path) -> None:
+    repository = HistoryRepository(tmp_path / "history.sqlite3")
+    valid_week = _snapshot(2026, date(2026, 8, 1), date(2026, 8, 6), "valid")
+    invalid_week = _snapshot(
+        2026,
+        date(2026, 8, 7),
+        date(2026, 8, 13),
+        object(),
+    )
+
+    with pytest.raises(sqlite3.ProgrammingError, match="type 'object' is not supported"):
+        repository.save_weeks([valid_week, invalid_week])
+
+    assert repository.load_weeks(2026) == []
 
 
 def test_transaction_rollback_restores_old_values_and_removes_new_rows(
@@ -230,6 +291,40 @@ def test_transaction_commits_week_and_generation_together(tmp_path: Path) -> Non
     assert repository.latest_generation(2026)["generated_at"] == generated_at.isoformat()
 
 
+def test_transaction_commit_failure_rolls_back_closes_and_reraises(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "history.sqlite3"
+    repository = HistoryRepository(database_path)
+    commit_error = sqlite3.OperationalError("forced commit failure")
+    opened_connection: sqlite3.Connection | None = None
+
+    class CommitFailingConnection(sqlite3.Connection):
+        def commit(self) -> None:
+            raise commit_error
+
+    def connect_with_commit_failure() -> sqlite3.Connection:
+        nonlocal opened_connection
+        opened_connection = sqlite3.connect(database_path, factory=CommitFailingConnection)
+        return opened_connection
+
+    monkeypatch.setattr(repository, "_connect", connect_with_commit_failure)
+    week = _snapshot(2026, date(2026, 8, 1), date(2026, 8, 6), "not committed")
+
+    with (
+        pytest.raises(sqlite3.OperationalError, match="forced commit failure") as raised,
+        repository.transaction() as connection,
+    ):
+        repository.save_weeks([week], connection)
+
+    assert raised.value is commit_error
+    assert opened_connection is not None
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        opened_connection.execute("SELECT 1")
+    assert HistoryRepository(database_path).load_weeks(2026) == []
+
+
 def test_latest_generation_uses_insert_order_and_isolates_fiscal_years(
     tmp_path: Path,
 ) -> None:
@@ -258,6 +353,31 @@ def test_latest_generation_uses_insert_order_and_isolates_fiscal_years(
         "operations": {"marker": "other-year", "name": "operations.xlsx", "rows": 34},
     }
     assert repository.latest_generation(2099) is None
+
+
+def test_corrupt_generation_summary_raises_repository_error_with_record_context(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "history.sqlite3"
+    repository = HistoryRepository(database_path)
+    generated_at = datetime(2026, 8, 7, 10, 30, tzinfo=UTC)
+    _generation(repository, 2026, generated_at, "baseline-v1", "original")
+    _execute_raw(
+        database_path,
+        "UPDATE generation_runs SET funds_summary = ? WHERE fiscal_year = ?",
+        ("{invalid-json", 2026),
+    )
+
+    with pytest.raises(HistoryDataError) as raised:
+        repository.latest_generation(2026)
+
+    assert raised.value.__cause__ is not None
+    message = str(raised.value).lower()
+    assert str(database_path).lower() in message
+    assert "fiscal_year=2026" in message
+    assert generated_at.isoformat().lower() in message
+    assert "generation" in message
+    assert "source summary" in message
 
 
 def test_parent_directory_is_created_and_reinitialization_preserves_data(

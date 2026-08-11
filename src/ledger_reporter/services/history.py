@@ -3,10 +3,14 @@ import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from ledger_reporter.domain.models import PeriodMetrics, ReportingPeriod, WeekSnapshot
+
+
+class HistoryDataError(RuntimeError):
+    """Raised when persisted history cannot be decoded."""
 
 
 class HistoryRepository:
@@ -156,27 +160,34 @@ class HistoryRepository:
         finally:
             connection.close()
 
-        return [
-            WeekSnapshot(
-                fiscal_year=row[0],
-                period=ReportingPeriod(
-                    start=date.fromisoformat(row[1]),
-                    end=date.fromisoformat(row[2]),
-                    label=row[3],
-                ),
-                metrics=PeriodMetrics(
-                    project_count=row[4],
-                    project_profit=Decimal(row[5]),
-                    scatter_count=row[6],
-                    scatter_profit=Decimal(row[7]),
-                    fund_amount=Decimal(row[8]),
-                    fund_profit=Decimal(row[9]),
-                    card_count=row[10],
-                    card_profit=Decimal(row[11]),
-                ),
-            )
-            for row in rows
-        ]
+        weeks = []
+        for row in rows:
+            try:
+                week = WeekSnapshot(
+                    fiscal_year=row[0],
+                    period=ReportingPeriod(
+                        start=date.fromisoformat(row[1]),
+                        end=date.fromisoformat(row[2]),
+                        label=row[3],
+                    ),
+                    metrics=PeriodMetrics(
+                        project_count=row[4],
+                        project_profit=Decimal(row[5]),
+                        scatter_count=row[6],
+                        scatter_profit=Decimal(row[7]),
+                        fund_amount=Decimal(row[8]),
+                        fund_profit=Decimal(row[9]),
+                        card_count=row[10],
+                        card_profit=Decimal(row[11]),
+                    ),
+                )
+            except (InvalidOperation, ValueError) as exc:
+                raise HistoryDataError(
+                    f"Corrupt week snapshot in database {self.path}: "
+                    f"fiscal_year={fiscal_year}, period={row[1]} to {row[2]}"
+                ) from exc
+            weeks.append(week)
+        return weeks
 
     def save_generation(
         self,
@@ -239,9 +250,17 @@ class HistoryRepository:
 
         if row is None:
             return None
+        try:
+            funds = json.loads(row[2])
+            operations = json.loads(row[3])
+        except json.JSONDecodeError as exc:
+            raise HistoryDataError(
+                f"Corrupt generation source summary in database {self.path}: "
+                f"fiscal_year={fiscal_year}, generated_at={row[0]}"
+            ) from exc
         return {
             "generated_at": row[0],
             "baseline_version": row[1],
-            "funds": json.loads(row[2]),
-            "operations": json.loads(row[3]),
+            "funds": funds,
+            "operations": operations,
         }
