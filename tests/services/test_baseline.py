@@ -45,21 +45,12 @@ def test_loads_fy2026_frozen_baseline() -> None:
     assert isinstance(baseline.rows[-1]["values"][1], Decimal)
 
 
-def test_fy2026_resource_payload_digest_is_stable() -> None:
-    payload = json.loads(
-        resource_path("fy2026_baseline.json").read_text(encoding="utf-8"),
-        parse_float=str,
-        parse_int=str,
-    )
-    canonical = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+def test_fy2026_resource_text_digest_is_stable() -> None:
+    content = resource_path("fy2026_baseline.json").read_text(encoding="utf-8")
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
 
-    assert sha256(canonical).hexdigest() == (
-        "cdf6e4c04a7d5e54ead23d7493204728af8c35d326b1613a43aa047c3fc6c343"
+    assert sha256(normalized.encode("utf-8")).hexdigest() == (
+        "576b8d19060ed31f236cdbcb516de83bb7cd885192f98dc7e3fab5051d4bd871"
     )
 
 
