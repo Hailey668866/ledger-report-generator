@@ -84,3 +84,18 @@ class BusinessTable:
     period: ReportingPeriod
     rows: tuple[BusinessMetric, ...]
     total: BusinessMetric
+
+
+@dataclass(frozen=True, slots=True)
+class ReportBundle:
+    fiscal_year: int
+    latest_period: ReportingPeriod
+    baseline_rows: tuple[dict[str, object], ...]
+    weeks: tuple[WeekSnapshot, ...]
+    business: BusinessTable
+
+
+@dataclass(frozen=True, slots=True)
+class SourceInspection:
+    fiscal_year: int
+    update_plan: UpdatePlan
