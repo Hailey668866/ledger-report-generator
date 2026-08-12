@@ -22,7 +22,9 @@ from ledger_reporter.exporters.excel import export_excel
 from ledger_reporter.exporters.png import export_pngs
 from ledger_reporter.ui.preview_dialog import PreviewDialog
 from ledger_reporter.ui.source_picker import SourcePicker
+from ledger_reporter.ui.uninstall_dialog import UninstallDialog
 from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
+from ledger_reporter.uninstall import default_uninstall_targets
 
 APP_STYLESHEET = """
 QMainWindow, QWidget#mainBody {
@@ -92,6 +94,11 @@ QPushButton#generateButton {
 }
 QPushButton#generateButton:hover {
     background: #c45a64;
+}
+QPushButton#destructiveButton {
+    background: #c43d4b;
+    border-color: #c43d4b;
+    color: #ffffff;
 }
 QPushButton#secondaryButton {
     min-width: 82px;
@@ -173,6 +180,12 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("请选择两份数据源")
         self.status_label.setObjectName("statusLabel")
         self.status_label.setWordWrap(True)
+
+        self.uninstall_targets = default_uninstall_targets()
+        self.application_menu = self.menuBar().addMenu("应用")
+        self.uninstall_action = self.application_menu.addAction("卸载台账报表生成器…")
+        self.uninstall_action.setEnabled(self.uninstall_targets is not None)
+        self.uninstall_action.triggered.connect(self.open_uninstall_dialog)
 
         for button in (
             self.validate_button,
@@ -265,11 +278,13 @@ class MainWindow(QMainWindow):
 
     def _restore_idle_controls(self) -> None:
         if self._background_task_running():
+            self.uninstall_action.setEnabled(False)
             return
         ready = self._sources_ready()
         self._set_source_pickers_enabled(True)
         self.validate_button.setEnabled(ready)
         self.generate_button.setEnabled(ready and self.inspection is not None)
+        self.uninstall_action.setEnabled(self.uninstall_targets is not None)
 
     def refresh_ready(self, _path: object | None = None) -> None:
         ready = self._sources_ready()
@@ -317,6 +332,7 @@ class MainWindow(QMainWindow):
         assert funds is not None and operations is not None
         self.validate_button.setEnabled(False)
         self.generate_button.setEnabled(False)
+        self.uninstall_action.setEnabled(False)
         self._set_source_pickers_enabled(False)
         self.status_label.setText("正在校验数据源...")
         self.validation_thread = QThread(self)
@@ -351,6 +367,7 @@ class MainWindow(QMainWindow):
         self._disable_result_actions()
         self.validate_button.setEnabled(False)
         self.generate_button.setEnabled(False)
+        self.uninstall_action.setEnabled(False)
         self._set_source_pickers_enabled(False)
         self.status_label.setText("正在生成报表...")
         self.generation_thread = QThread(self)
@@ -416,6 +433,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "图片导出失败", str(exc) or exc.__class__.__name__)
         else:
             self.status_label.setText(f"图片已导出至：{path.name}")
+
+    def open_uninstall_dialog(self) -> None:
+        if self.uninstall_targets is not None:
+            UninstallDialog(self.uninstall_targets, self).exec()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._background_task_running():
