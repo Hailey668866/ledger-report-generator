@@ -65,6 +65,9 @@ def test_pyinstaller_spec_builds_a_windowed_self_contained_app_with_resources() 
     assert '"CFBundleDisplayName": "台账报表生成器"' in spec
     assert '"LSMinimumSystemVersion": "12.0"' in spec
     assert '"NSHighResolutionCapable": True' in spec
+    assert "NotoSansSC-Variable.ttf" in {
+        path.name for path in (ROOT / "src/ledger_reporter/resources").iterdir()
+    }
 
 
 def test_dmg_contains_app_applications_link_and_installation_guide(monkeypatch) -> None:

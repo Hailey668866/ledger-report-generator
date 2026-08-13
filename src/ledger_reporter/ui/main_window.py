@@ -1,9 +1,8 @@
 from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import QThread
-from PySide6.QtGui import QCloseEvent, QFont, QFontDatabase
+from PySide6.QtCore import Qt, QThread
+from PySide6.QtGui import QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -17,9 +16,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ledger_reporter.app_paths import resource_path
 from ledger_reporter.domain.models import ReportBundle, SourceInspection
 from ledger_reporter.exporters.excel import export_excel
 from ledger_reporter.exporters.png import export_pngs
+from ledger_reporter.ui.fonts import ui_font
 from ledger_reporter.ui.preview_dialog import PreviewDialog
 from ledger_reporter.ui.source_picker import SourcePicker
 from ledger_reporter.ui.uninstall_dialog import UninstallDialog
@@ -28,72 +29,125 @@ from ledger_reporter.uninstall import default_uninstall_targets
 
 APP_STYLESHEET = """
 QMainWindow, QWidget#mainBody {
-    background: #f5f7fa;
-    color: #202938;
+    background: #f6f8f6;
+    color: #26372e;
     font-size: 13px;
 }
-QLabel#windowTitle {
-    font-size: 23px;
-    font-weight: 700;
-    color: #202938;
-}
-QLabel#sectionTitle {
-    font-size: 14px;
-    font-weight: 700;
-    color: #344054;
-}
-QFrame#sourcePanel, QFrame#statusPanel {
+QFrame#brandBar {
     background: #ffffff;
-    border: 1px solid #d9e0e8;
-    border-radius: 6px;
+    border-bottom: 1px solid #e2e7e4;
 }
-QLabel#sourceTitle {
-    font-weight: 600;
-    color: #344054;
+QLabel#brandTitle {
+    font-size: 16px;
+    font-weight: 700;
+    color: #1e3027;
 }
-QLabel#sourcePath {
-    color: #667085;
+QLabel#readyDot {
+    background: #aeb9b2;
+    border-radius: 4px;
+}
+QLabel#readyDot[ready="true"] {
+    background: #2d955e;
 }
 QLabel#statusLabel {
-    color: #344054;
-    font-weight: 600;
+    color: #627168;
+    font-size: 11px;
+}
+QLabel#sectionTitle {
+    font-size: 12px;
+    font-weight: 700;
+    color: #627168;
+}
+QWidget#sourcePicker {
+    background: #ffffff;
+    border: 1px solid #d8e0db;
+    border-radius: 6px;
+}
+QLabel#sourceIcon {
+    background: #e5f1e9;
+    color: #197345;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 800;
+}
+QLabel#sourceTitle {
+    font-weight: 700;
+    color: #26372e;
+}
+QLabel#sourcePath {
+    color: #77847c;
+    font-size: 11px;
+}
+QFrame#periodCard {
+    background: #eef4f0;
+    border-left: 3px solid #268452;
+}
+QLabel#periodLabel {
+    color: #738078;
+    font-size: 10px;
+}
+QLabel#periodValue {
+    color: #25382d;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#planDetail {
+    color: #77847c;
+    font-size: 10px;
+}
+QFrame#resultBar {
+    border-top: 1px solid #e3e8e5;
+}
+QLabel#resultTitle {
+    color: #24372d;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#resultMeta {
+    color: #7a867f;
+    font-size: 10px;
 }
 QPushButton {
-    min-height: 38px;
-    padding: 0 16px;
-    border-radius: 6px;
-    border: 1px solid #cbd4df;
+    min-height: 34px;
+    padding: 0 14px;
+    border-radius: 5px;
+    border: 1px solid #cbd6d0;
     background: #ffffff;
-    color: #344054;
+    color: #30443a;
     font-weight: 600;
 }
 QPushButton:hover {
-    background: #f1f4f8;
-    border-color: #9eacbd;
+    background: #f3f7f4;
+    border-color: #9caf9f;
 }
 QPushButton:pressed {
-    background: #e8edf3;
+    background: #e8f0eb;
 }
 QPushButton:disabled {
-    color: #98a2b3;
-    background: #eef1f5;
-    border-color: #e1e6ed;
+    color: #9aa49e;
+    background: #f1f3f2;
+    border-color: #dde3df;
 }
 QPushButton#primaryButton {
-    background: #315f9b;
-    border-color: #315f9b;
-    color: #ffffff;
+    border-color: #9caf9f;
+    color: #236c46;
 }
 QPushButton#primaryButton:hover {
-    background: #274e82;
+    background: #eef6f1;
 }
 QPushButton#generateButton {
-    background: #d96c75;
-    border-color: #d96c75;
+    min-height: 42px;
+    background: #177746;
+    border-color: #177746;
     color: #ffffff;
 }
 QPushButton#generateButton:hover {
-    background: #c45a64;
+    background: #11663b;
+}
+QPushButton#previewButton {
+    border-color: #86b79c;
+    color: #166c40;
+    font-weight: 700;
 }
 QPushButton#destructiveButton {
     background: #c43d4b;
@@ -101,7 +155,7 @@ QPushButton#destructiveButton {
     color: #ffffff;
 }
 QPushButton#secondaryButton {
-    min-width: 82px;
+    min-width: 94px;
 }
 QTableWidget#previewTable {
     background: #ffffff;
@@ -109,34 +163,6 @@ QTableWidget#previewTable {
     gridline-color: #b7c0bb;
 }
 """
-
-
-@lru_cache(maxsize=1)
-def _ui_font_family() -> str | None:
-    preferred = ("PingFang SC", "Microsoft YaHei", "Microsoft YaHei UI")
-    available = set(QFontDatabase.families())
-    for family in preferred:
-        if family in available:
-            return family
-
-    font_paths = (
-        Path("/System/Library/Fonts/PingFang.ttc"),
-        Path("/System/Library/Fonts/STHeiti Medium.ttc"),
-        Path("C:/Windows/Fonts/msyh.ttc"),
-    )
-    for path in font_paths:
-        if not path.is_file():
-            continue
-        font_id = QFontDatabase.addApplicationFont(str(path))
-        if font_id < 0:
-            continue
-        families = QFontDatabase.applicationFontFamilies(font_id)
-        for family in preferred:
-            if family in families:
-                return family
-        if families:
-            return families[0]
-    return None
 
 
 class MainWindow(QMainWindow):
@@ -151,9 +177,8 @@ class MainWindow(QMainWindow):
         self.generation_worker: GenerationWorker | None = None
 
         self.setWindowTitle("台账报表生成器")
-        self.setMinimumSize(720, 480)
-        if font_family := _ui_font_family():
-            self.setFont(QFont(font_family, 10))
+        self.setMinimumSize(720, 520)
+        self.setFont(ui_font(10))
         self.setStyleSheet(APP_STYLESHEET)
         self.funds_picker = SourcePicker("资金台账")
         self.operations_picker = SourcePicker("运营台账")
@@ -164,8 +189,10 @@ class MainWindow(QMainWindow):
         )
         self.generate_button = QPushButton("生成两张报表")
         self.generate_button.setObjectName("generateButton")
+        self.generate_button.setMinimumHeight(42)
         self.generate_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
         self.preview_button = QPushButton("预览报表")
+        self.preview_button.setObjectName("previewButton")
         self.preview_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
         )
@@ -179,7 +206,10 @@ class MainWindow(QMainWindow):
         )
         self.status_label = QLabel("请选择两份数据源")
         self.status_label.setObjectName("statusLabel")
-        self.status_label.setWordWrap(True)
+        self.status_dot = QLabel()
+        self.status_dot.setObjectName("readyDot")
+        self.status_dot.setProperty("ready", False)
+        self.status_dot.setFixedSize(8, 8)
 
         self.uninstall_targets = default_uninstall_targets()
         self.application_menu = self.menuBar().addMenu("应用")
@@ -196,50 +226,94 @@ class MainWindow(QMainWindow):
         ):
             button.setEnabled(False)
 
+        root = QWidget()
+        root.setObjectName("mainBody")
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        brand_bar = QFrame()
+        brand_bar.setObjectName("brandBar")
+        brand_bar.setFixedHeight(58)
+        brand_layout = QHBoxLayout(brand_bar)
+        brand_layout.setContentsMargins(20, 0, 20, 0)
+        brand_layout.setSpacing(10)
+        self.brand_icon = QLabel()
+        self.brand_icon.setFixedSize(34, 34)
+        self.brand_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon = QPixmap(str(resource_path("app-icon.png")))
+        self.brand_icon.setPixmap(
+            icon.scaled(
+                34,
+                34,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+        self.brand_title = QLabel("台账报表生成器")
+        self.brand_title.setObjectName("brandTitle")
+        brand_layout.addWidget(self.brand_icon)
+        brand_layout.addWidget(self.brand_title)
+        brand_layout.addStretch(1)
+        brand_layout.addWidget(self.status_dot)
+        brand_layout.addWidget(self.status_label)
+        root_layout.addWidget(brand_bar)
+
         body = QWidget()
-        body.setObjectName("mainBody")
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(16)
-        title = QLabel("台账报表生成器")
-        title.setObjectName("windowTitle")
-        layout.addWidget(title)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(24, 22, 24, 22)
+        body_layout.setSpacing(11)
         source_title = QLabel("数据源")
         source_title.setObjectName("sectionTitle")
-        layout.addWidget(source_title)
+        body_layout.addWidget(source_title)
+        body_layout.addWidget(self.funds_picker)
+        body_layout.addWidget(self.operations_picker)
 
-        source_panel = QFrame()
-        source_panel.setObjectName("sourcePanel")
-        source_layout = QVBoxLayout(source_panel)
-        source_layout.setContentsMargins(18, 16, 18, 16)
-        source_layout.setSpacing(14)
-        source_layout.addWidget(self.funds_picker)
-        source_layout.addWidget(self.operations_picker)
-        layout.addWidget(source_panel)
+        self.period_panel = QWidget()
+        period_layout = QHBoxLayout(self.period_panel)
+        period_layout.setContentsMargins(0, 4, 0, 0)
+        period_layout.setSpacing(9)
+        summary_card, self.summary_period_value = self._period_card("经营汇总")
+        weekly_card, self.weekly_period_value = self._period_card("自营项目")
+        period_layout.addWidget(summary_card, 1)
+        period_layout.addWidget(weekly_card, 1)
+        self.period_panel.hide()
+        body_layout.addWidget(self.period_panel)
 
-        status_panel = QFrame()
-        status_panel.setObjectName("statusPanel")
-        status_layout = QHBoxLayout(status_panel)
-        status_layout.setContentsMargins(16, 12, 16, 12)
-        status_layout.addWidget(self.status_label)
-        layout.addWidget(status_panel)
+        self.plan_detail_label = QLabel()
+        self.plan_detail_label.setObjectName("planDetail")
+        self.plan_detail_label.hide()
+        body_layout.addWidget(self.plan_detail_label)
 
         workflow = QHBoxLayout()
-        workflow.setSpacing(10)
+        workflow.setSpacing(9)
         workflow.addWidget(self.validate_button)
-        workflow.addWidget(self.generate_button)
-        workflow.addStretch(1)
-        layout.addLayout(workflow)
-        layout.addStretch(1)
+        workflow.addWidget(self.generate_button, 1)
+        body_layout.addLayout(workflow)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(10)
-        actions.addWidget(self.preview_button)
-        actions.addStretch(1)
-        actions.addWidget(self.excel_button)
-        actions.addWidget(self.png_button)
-        layout.addLayout(actions)
-        self.setCentralWidget(body)
+        self.result_bar = QFrame()
+        self.result_bar.setObjectName("resultBar")
+        result_layout = QHBoxLayout(self.result_bar)
+        result_layout.setContentsMargins(0, 14, 0, 0)
+        result_layout.setSpacing(8)
+        result_copy = QVBoxLayout()
+        result_copy.setContentsMargins(0, 0, 0, 0)
+        result_copy.setSpacing(3)
+        self.result_title = QLabel("报表已生成")
+        self.result_title.setObjectName("resultTitle")
+        self.result_meta = QLabel("2 张表 · 数据校验通过")
+        self.result_meta.setObjectName("resultMeta")
+        result_copy.addWidget(self.result_title)
+        result_copy.addWidget(self.result_meta)
+        result_layout.addLayout(result_copy, 1)
+        result_layout.addWidget(self.preview_button)
+        result_layout.addWidget(self.excel_button)
+        result_layout.addWidget(self.png_button)
+        self.result_bar.hide()
+        body_layout.addWidget(self.result_bar)
+        body_layout.addStretch(1)
+        root_layout.addWidget(body, 1)
+        self.setCentralWidget(root)
 
         self.funds_picker.path_changed.connect(self.refresh_ready)
         self.operations_picker.path_changed.connect(self.refresh_ready)
@@ -248,6 +322,27 @@ class MainWindow(QMainWindow):
         self.preview_button.clicked.connect(self.open_preview)
         self.excel_button.clicked.connect(self.export_excel_file)
         self.png_button.clicked.connect(self.export_png_files)
+
+    @staticmethod
+    def _period_card(label: str) -> tuple[QFrame, QLabel]:
+        card = QFrame()
+        card.setObjectName("periodCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 9, 12, 10)
+        layout.setSpacing(3)
+        title = QLabel(label)
+        title.setObjectName("periodLabel")
+        value = QLabel()
+        value.setObjectName("periodValue")
+        layout.addWidget(title)
+        layout.addWidget(value)
+        return card, value
+
+    def _set_ready_status(self, text: str, *, ready: bool) -> None:
+        self.status_label.setText(text)
+        self.status_dot.setProperty("ready", ready)
+        self.status_dot.style().unpolish(self.status_dot)
+        self.status_dot.style().polish(self.status_dot)
 
     def _sources_ready(self) -> bool:
         return all(
@@ -293,35 +388,44 @@ class MainWindow(QMainWindow):
         self.validate_button.setEnabled(ready)
         self.generate_button.setEnabled(False)
         self._disable_result_actions()
-        self.status_label.setText("可以校验数据源" if ready else "请选择两份数据源")
+        self.period_panel.hide()
+        self.plan_detail_label.hide()
+        self.result_bar.hide()
+        self._set_ready_status("可以校验数据源" if ready else "请选择两份数据源", ready=False)
 
     def on_validation_succeeded(self, inspection: SourceInspection) -> None:
         self.inspection = inspection
         plan = inspection.update_plan
         added = "、".join(item.label for item in plan.new_periods) or "无"
         refreshed = "、".join(item.label for item in plan.refresh_periods) or "无"
-        self.status_label.setText(
-            f"{inspection.fiscal_year}财年 | 最新 {plan.latest.label} | "
-            f"新增 {added} | 回刷 {refreshed}"
-        )
+        latest = plan.latest
+        week_name = latest.label.split("（", 1)[0]
+        self.summary_period_value.setText(f"{inspection.fiscal_year}财年，截至 {latest.end:%m-%d}")
+        self.weekly_period_value.setText(f"{latest.start.year}年{latest.start.month}月 {week_name}")
+        self.plan_detail_label.setText(f"本次新增 {added} · 回刷 {refreshed}")
+        self.period_panel.show()
+        self.plan_detail_label.show()
+        self._set_ready_status("数据源已就绪", ready=True)
         self.generate_button.setEnabled(not self._background_task_running())
 
     def on_validation_failed(self, message: str) -> None:
         self.inspection = None
         self.generate_button.setEnabled(False)
-        self.status_label.setText("数据源校验失败")
+        self._set_ready_status("数据源校验失败", ready=False)
         QMessageBox.critical(self, "数据源校验失败", message)
 
     def on_generation_succeeded(self, bundle: ReportBundle) -> None:
         self.bundle = bundle
-        self.status_label.setText(f"已生成：{bundle.latest_period.label}")
+        self._set_ready_status("数据源已就绪", ready=True)
+        self.result_bar.show()
         for button in (self.preview_button, self.excel_button, self.png_button):
             button.setEnabled(True)
 
     def on_generation_failed(self, message: str) -> None:
         self.bundle = None
         self._disable_result_actions()
-        self.status_label.setText("生成失败")
+        self.result_bar.hide()
+        self._set_ready_status("生成失败", ready=False)
         QMessageBox.critical(self, "无法生成报表", message)
 
     def start_validation(self) -> None:
@@ -334,7 +438,7 @@ class MainWindow(QMainWindow):
         self.generate_button.setEnabled(False)
         self.uninstall_action.setEnabled(False)
         self._set_source_pickers_enabled(False)
-        self.status_label.setText("正在校验数据源...")
+        self._set_ready_status("正在校验数据源...", ready=False)
         self.validation_thread = QThread(self)
         self.validation_worker = ValidationWorker(
             self.report_service,
@@ -369,7 +473,7 @@ class MainWindow(QMainWindow):
         self.generate_button.setEnabled(False)
         self.uninstall_action.setEnabled(False)
         self._set_source_pickers_enabled(False)
-        self.status_label.setText("正在生成报表...")
+        self._set_ready_status("正在生成报表...", ready=False)
         self.generation_thread = QThread(self)
         self.generation_worker = GenerationWorker(
             self.report_service,

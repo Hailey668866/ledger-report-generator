@@ -1,8 +1,17 @@
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
-from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QPushButton, QStyle, QWidget
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QStyle,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class SourcePicker(QWidget):
@@ -11,22 +20,34 @@ class SourcePicker(QWidget):
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self.setObjectName("sourcePicker")
+        self.setMinimumHeight(64)
         self._path: Path | None = None
+        self.icon_label = QLabel(title[:1])
+        self.icon_label.setObjectName("sourceIcon")
+        self.icon_label.setFixedSize(38, 38)
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label = QLabel(title)
         self.title_label.setObjectName("sourceTitle")
-        self.title_label.setFixedWidth(92)
-        self.label = QLabel("未选择")
+        self.label = QLabel("尚未选择 XLSX 文件")
         self.label.setObjectName("sourcePath")
-        self.button = QPushButton("选择")
+        self.label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.button = QPushButton("选择文件")
         self.button.setObjectName("secondaryButton")
         self.button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         self.button.clicked.connect(self.choose_file)
 
+        copy_layout = QVBoxLayout()
+        copy_layout.setContentsMargins(0, 0, 0, 0)
+        copy_layout.setSpacing(3)
+        copy_layout.addWidget(self.title_label)
+        copy_layout.addWidget(self.label)
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.label, 1)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(11)
+        layout.addWidget(self.icon_label)
+        layout.addLayout(copy_layout, 1)
         layout.addWidget(self.button)
 
     @property

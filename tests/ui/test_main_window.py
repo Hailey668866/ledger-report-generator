@@ -4,7 +4,8 @@ import pytest
 from PySide6.QtCore import QThread
 
 from ledger_reporter.domain.models import SourceInspection, UpdatePlan
-from ledger_reporter.ui.main_window import MainWindow, _ui_font_family
+from ledger_reporter.ui.fonts import ui_font_family
+from ledger_reporter.ui.main_window import MainWindow
 from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
 
 
@@ -62,7 +63,7 @@ def test_generate_requires_two_existing_sources_and_a_current_validation(
     period = fake_report_service.bundle.latest_period
     window.on_validation_succeeded(SourceInspection(2026, UpdatePlan(period, (period,), ())))
     assert window.generate_button.isEnabled()
-    assert "新增" in window.status_label.text()
+    assert "新增" in window.plan_detail_label.text()
 
     replacement = tmp_path / "replacement.xlsx"
     replacement.touch()
@@ -75,13 +76,50 @@ def test_window_uses_an_available_chinese_font(qtbot, fake_report_service) -> No
     window = MainWindow(fake_report_service)
     qtbot.addWidget(window)
 
-    expected_family = _ui_font_family()
-    assert expected_family in {
-        "PingFang SC",
-        "Microsoft YaHei",
-        "Microsoft YaHei UI",
-    }
+    expected_family = ui_font_family()
+    assert expected_family == "Noto Sans SC"
     assert window.font().family() == expected_family
+
+
+def test_window_matches_approved_collapsed_preview_layout(qtbot, fake_report_service) -> None:
+    window = MainWindow(fake_report_service)
+    qtbot.addWidget(window)
+
+    assert window.brand_title.text() == "台账报表生成器"
+    assert not window.brand_icon.pixmap().isNull()
+    assert window.funds_picker.button.text() == "选择文件"
+    assert window.operations_picker.button.text() == "选择文件"
+    assert window.period_panel.isHidden()
+    assert window.result_bar.isHidden()
+    assert window.generate_button.minimumHeight() == 42
+
+
+def test_validation_populates_period_cards_and_generation_omits_week_status(
+    qtbot,
+    fake_report_service,
+    report_bundle,
+) -> None:
+    window = MainWindow(fake_report_service)
+    qtbot.addWidget(window)
+    period = report_bundle.latest_period
+
+    window.on_validation_succeeded(SourceInspection(2026, UpdatePlan(period, (period,), ())))
+
+    assert not window.period_panel.isHidden()
+    assert window.summary_period_value.text() == "2026财年，截至 08-06"
+    assert window.weekly_period_value.text() == "2026年8月 W1"
+    assert window.status_label.text() == "数据源已就绪"
+
+    window.on_generation_succeeded(report_bundle)
+
+    assert not window.result_bar.isHidden()
+    assert window.result_title.text() == "报表已生成"
+    assert window.result_meta.text() == "2 张表 · 数据校验通过"
+    visible_copy = (
+        f"{window.status_label.text()} {window.result_title.text()} {window.result_meta.text()}"
+    )
+    assert "已生成：" not in visible_copy
+    assert period.label not in visible_copy
 
 
 def test_success_enables_lazy_preview_and_exports(
