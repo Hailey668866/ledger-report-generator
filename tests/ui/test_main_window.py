@@ -2,10 +2,9 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QThread
-from PySide6.QtGui import QFontInfo
 
 from ledger_reporter.domain.models import SourceInspection, UpdatePlan
-from ledger_reporter.ui.main_window import MainWindow
+from ledger_reporter.ui.main_window import MainWindow, _ui_font_family
 from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
 
 
@@ -76,11 +75,13 @@ def test_window_uses_an_available_chinese_font(qtbot, fake_report_service) -> No
     window = MainWindow(fake_report_service)
     qtbot.addWidget(window)
 
-    assert QFontInfo(window.status_label.font()).family() in {
+    expected_family = _ui_font_family()
+    assert expected_family in {
         "PingFang SC",
         "Microsoft YaHei",
         "Microsoft YaHei UI",
     }
+    assert window.font().family() == expected_family
 
 
 def test_success_enables_lazy_preview_and_exports(
