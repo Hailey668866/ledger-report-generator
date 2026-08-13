@@ -89,3 +89,40 @@ def test_application_error_message_does_not_blame_history() -> None:
     assert "重新安装应用" in message
     assert "不要移动或删除历史文件" in message
     assert "history.sqlite3.backup" not in message
+
+
+def test_smoke_ready_marker_is_written_after_window_processes_events(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "smoke" / "ready"
+    events: list[str] = []
+
+    class SmokeApplication(FakeApplication):
+        def processEvents(self) -> None:
+            events.append("processEvents")
+
+        def exec(self) -> int:
+            events.append("exec")
+            assert marker.read_text(encoding="ascii") == "ready\n"
+            return 0
+
+    class SmokeWindow:
+        def __init__(self, _service) -> None:
+            pass
+
+        def resize(self, _width: int, _height: int) -> None:
+            events.append("resize")
+
+        def show(self) -> None:
+            events.append("show")
+
+    monkeypatch.setenv("LEDGER_REPORTER_SMOKE_READY_FILE", str(marker))
+    monkeypatch.setattr(app_entry, "QApplication", SmokeApplication)
+    monkeypatch.setattr(app_entry, "app_data_dir", lambda: tmp_path / "data")
+    monkeypatch.setattr(app_entry, "HistoryRepository", lambda _path: object())
+    monkeypatch.setattr(app_entry, "ReportService", lambda _repository: object())
+    monkeypatch.setattr(app_entry, "MainWindow", SmokeWindow)
+
+    assert app_entry.main() == 0
+    assert events == ["resize", "show", "processEvents", "exec"]

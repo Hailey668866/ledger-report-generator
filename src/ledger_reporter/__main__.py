@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -61,11 +62,17 @@ def main() -> int:
         return 1
     try:
         window = MainWindow(ReportService(repository))
+        window.resize(820, 520)
+        window.show()
+        smoke_ready_file = os.getenv("LEDGER_REPORTER_SMOKE_READY_FILE")
+        if smoke_ready_file:
+            app.processEvents()
+            marker = Path(smoke_ready_file)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("ready\n", encoding="ascii")
     except Exception as exc:  # noqa: BLE001 - packaged app must surface startup failures.
         _show_application_startup_error(exc)
         return 1
-    window.resize(820, 520)
-    window.show()
     return app.exec()
 
 

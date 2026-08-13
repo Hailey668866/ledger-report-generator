@@ -1,0 +1,41 @@
+name: build-macos
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Test and build native application
+        run: TARGET_ARCH=${{ matrix.arch }} bash scripts/build_macos.sh
+      - name: Upload installer and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledger-report-generator-macos-${{ matrix.arch }}
+          path: |
+            dist/台账报表生成器-${{ matrix.arch }}.dmg
+            dist/台账报表生成器-${{ matrix.arch }}.dmg.sha256
+          if-no-files-found: error
