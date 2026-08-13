@@ -2,8 +2,12 @@
 .superpowers/
 .worktrees/
 .venv/
+.venv-macos/
 __pycache__/
 .pytest_cache/
 build/
 dist/
 *.spec
+!packaging/ledger_reporter.spec
+packaging/*.icns
+outputs/
