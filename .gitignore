@@ -10,3 +10,4 @@ dist/
 *.spec
 !packaging/ledger_reporter.spec
 packaging/*.icns
+outputs/

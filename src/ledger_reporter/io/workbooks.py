@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import zip_longest
@@ -66,7 +66,9 @@ def _date(value: object, label: str) -> date:
     raise WorkbookDataError(f"字段「{label}」包含无法识别的日期：{value!r}。")
 
 
-def _header_positions(headers: tuple[object, ...], required_headers: tuple[str, ...], sheet_name: str) -> dict[str, int]:
+def _header_positions(
+    headers: tuple[object, ...], required_headers: tuple[str, ...], sheet_name: str
+) -> dict[str, int]:
     positions: dict[str, int] = {}
     for header in required_headers:
         matches = [index for index, value in enumerate(headers) if value == header]
@@ -84,6 +86,7 @@ def _validated_rows(
     required_headers: tuple[str, ...],
     numeric_headers: tuple[str, ...],
     active_date_header: str,
+    skip_row: Callable[[dict[str, object]], bool] | None = None,
 ) -> Iterator[dict[str, object]]:
     sheet_name = cached_sheet.title
     cached_rows = cached_sheet.iter_rows(values_only=True)
@@ -105,6 +108,12 @@ def _validated_rows(
     for cached_row, formula_row in zip_longest(cached_rows, formula_rows, fillvalue=missing):
         if cached_row is missing or formula_row is missing:
             raise WorkbookDataError(f"工作表「{sheet_name}」的公式和值视图行结构不一致。")
+        row = {
+            header: cached_row[index] if index < len(cached_row) else None
+            for header, index in cached_positions.items()
+        }
+        if skip_row is not None and skip_row(row):
+            continue
         active_date = cached_row[cached_positions[active_date_header]]
         if active_date is not None and active_date != "":
             for header, formula_index in formula_positions.items():
@@ -115,10 +124,7 @@ def _validated_rows(
                         f"工作表「{sheet_name}」字段「{header}」的公式没有缓存结果。"
                         "请用 Excel 或 WPS 重新计算后保存该工作簿，再重新导入。"
                     )
-        yield {
-            header: cached_row[index] if index < len(cached_row) else None
-            for header, index in cached_positions.items()
-        }
+        yield row
 
 
 def _open_workbook_views(path: Path):
@@ -145,6 +151,16 @@ def _optional_text(value: object) -> str | None:
     return text if text.strip() else None
 
 
+def _is_product_table_metadata(row: dict[str, object]) -> bool:
+    return row["预估总应收"] == "公式" and all(
+        row[header] == "产品表" for header in ("提单号", "目的口岸", "预计起飞时间", "B1供应商")
+    )
+
+
+def _is_not_disbursed(row: dict[str, object]) -> bool:
+    return row["信容付款日期"] == "未放款"
+
+
 def _read_operations(path: Path) -> list[OperationalRecord]:
     source = Path(path)
     cached_book, formula_book = _open_workbook_views(source)
@@ -158,6 +174,7 @@ def _read_operations(path: Path) -> list[OperationalRecord]:
             OPS_HEADERS,
             ("预估总应收", "预估毛利润"),
             "预计起飞时间",
+            _is_product_table_metadata,
         ):
             departure_value = row["预计起飞时间"]
             if departure_value is None or departure_value == "":
@@ -191,7 +208,9 @@ def _read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
         ]
         if not selected_sheets:
             years_text = "、".join(str(year) for year in sorted(allowed_years))
-            raise WorkbookDataError(f"工作簿「{source}」未找到资金散板汇总工作表（请求年度：{years_text}）。")
+            raise WorkbookDataError(
+                f"工作簿「{source}」未找到资金散板汇总工作表（请求年度：{years_text}）。"
+            )
 
         records: list[FundRecord] = []
         for sheet_name in selected_sheets:
@@ -202,6 +221,7 @@ def _read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
                 FUND_HEADERS,
                 ("付款金额合计（90%）", "应收操作费"),
                 "信容付款日期",
+                _is_not_disbursed,
             ):
                 payment_date = row["信容付款日期"]
                 if payment_date is None or payment_date == "":

@@ -167,12 +167,8 @@ def test_uses_inclusive_departure_dates_and_excludes_operations_outside_period()
     operations = [
         operation(bill_no="start", departure=PERIOD.start, supplier=supplier, profit="2"),
         operation(bill_no="end", departure=PERIOD.end, supplier=supplier, profit="3"),
-        operation(
-            bill_no="before", departure=date(2026, 7, 31), supplier=supplier, profit="100"
-        ),
-        operation(
-            bill_no="after", departure=date(2026, 8, 8), supplier=supplier, profit="200"
-        ),
+        operation(bill_no="before", departure=date(2026, 7, 31), supplier=supplier, profit="100"),
+        operation(bill_no="after", departure=date(2026, 8, 8), supplier=supplier, profit="200"),
     ]
 
     table = calculate_business_table(PERIOD, operations)

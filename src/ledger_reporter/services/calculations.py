@@ -17,9 +17,7 @@ DAYS_PER_YEAR = Decimal(365)
 FUND_TERM_DAYS = Decimal(60)
 
 
-def _summarize_operations(
-    name: str, operations: Iterable[OperationalRecord]
-) -> BusinessMetric:
+def _summarize_operations(name: str, operations: Iterable[OperationalRecord]) -> BusinessMetric:
     records = tuple(operations)
     return BusinessMetric(
         name=name,
@@ -67,13 +65,21 @@ def calculate_period(
     ]
 
     unknown_channels = sorted(
-        {record.channel or "<空白>" for record in selected_funds if record.channel not in FUND_RATES}
+        {
+            record.channel or "<空白>"
+            for record in selected_funds
+            if record.channel not in FUND_RATES
+        }
     )
     if unknown_channels:
         raise WorkbookDataError(f"未知资金渠道：{', '.join(unknown_channels)}")
 
-    project_operations = [record for record in selected_operations if record.project_type != SCATTER]
-    scatter_operations = [record for record in selected_operations if record.project_type == SCATTER]
+    project_operations = [
+        record for record in selected_operations if record.project_type != SCATTER
+    ]
+    scatter_operations = [
+        record for record in selected_operations if record.project_type == SCATTER
+    ]
 
     return PeriodMetrics(
         project_count=sum(bool(record.bill_no) for record in project_operations),
@@ -83,7 +89,9 @@ def calculate_period(
         fund_amount=sum((record.amount for record in selected_funds), ZERO),
         fund_profit=sum(
             (
-                record.amount * (FUND_RATES[record.channel] - CAPITAL_COST) * FUND_TERM_DAYS
+                record.amount
+                * (FUND_RATES[record.channel] - CAPITAL_COST)
+                * FUND_TERM_DAYS
                 / DAYS_PER_YEAR
                 + record.operation_fee
                 for record in selected_funds

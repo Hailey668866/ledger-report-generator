@@ -23,7 +23,9 @@ OPS_HEADERS = (
 FUND_HEADERS = ("渠道名称", "信容付款日期", "付款金额合计（90%）", "应收操作费")
 
 
-def save_book(path: Path, sheet_name: str, headers: tuple[str, ...], rows: list[tuple[object, ...]]) -> None:
+def save_book(
+    path: Path, sheet_name: str, headers: tuple[str, ...], rows: list[tuple[object, ...]]
+) -> None:
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = sheet_name
@@ -96,6 +98,63 @@ def test_read_operations_accepts_iso_datetime_string(tmp_path: Path) -> None:
     records = read_operations(path)
 
     assert records[0].departure == date(2026, 8, 2)
+
+
+def test_read_operations_skips_embedded_product_table_metadata_row(tmp_path: Path) -> None:
+    path = tmp_path / "operations.xlsx"
+    save_book(
+        path,
+        "台账明细",
+        OPS_HEADERS,
+        [
+            ("产品表", "运费计费重时更新", "产品表", "产品表", "产品表", "公式", None),
+            ("B-1", "散板", "LAX", "2026-08-02", "供应商 A", 100, 10),
+        ],
+    )
+
+    records = read_operations(path)
+
+    assert [record.bill_no for record in records] == ["B-1"]
+
+
+def test_product_table_metadata_skips_uncached_amount_formula(tmp_path: Path) -> None:
+    path = tmp_path / "operations.xlsx"
+    save_book(
+        path,
+        "台账明细",
+        OPS_HEADERS,
+        [("产品表", "运费计费重时更新", "产品表", "产品表", "产品表", "公式", "=1+1")],
+    )
+
+    assert read_operations(path) == []
+
+
+def test_read_operations_rejects_bad_date_in_regular_business_row(tmp_path: Path) -> None:
+    path = tmp_path / "operations.xlsx"
+    save_book(
+        path,
+        "台账明细",
+        OPS_HEADERS,
+        [("B-1", "散板", "LAX", "待确认", "供应商 A", 100, 10)],
+    )
+
+    with pytest.raises(WorkbookDataError, match="预计起飞时间.*待确认"):
+        read_operations(path)
+
+
+def test_read_operations_does_not_skip_product_markers_without_formula_metadata(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "operations.xlsx"
+    save_book(
+        path,
+        "台账明细",
+        OPS_HEADERS,
+        [("产品表", "项目", "产品表", "产品表", "产品表", 100, 10)],
+    )
+
+    with pytest.raises(WorkbookDataError, match="预计起飞时间.*产品表"):
+        read_operations(path)
 
 
 def test_read_operations_rejects_missing_required_header(tmp_path: Path) -> None:
@@ -248,6 +307,48 @@ def test_read_funds_skips_formula_cache_check_for_blank_payment_date(tmp_path: P
     )
 
     assert read_funds(path, {2026}) == []
+
+
+def test_read_funds_skips_rows_that_are_explicitly_not_disbursed(tmp_path: Path) -> None:
+    path = tmp_path / "funds.xlsx"
+    save_book(
+        path,
+        "资金散板汇总2026",
+        FUND_HEADERS,
+        [
+            ("渠道 A", "未放款", 90, 3.25),
+            ("渠道 A", "2026-08-05", 80, 2.25),
+        ],
+    )
+
+    records = read_funds(path, {2026})
+
+    assert [record.amount for record in records] == [Decimal(80)]
+
+
+def test_not_disbursed_row_skips_uncached_amount_formulas(tmp_path: Path) -> None:
+    path = tmp_path / "funds.xlsx"
+    save_book(
+        path,
+        "资金散板汇总2026",
+        FUND_HEADERS,
+        [("渠道 A", "未放款", "=1+1", "=2+2")],
+    )
+
+    assert read_funds(path, {2026}) == []
+
+
+def test_read_funds_rejects_other_bad_payment_dates(tmp_path: Path) -> None:
+    path = tmp_path / "funds.xlsx"
+    save_book(
+        path,
+        "资金散板汇总2026",
+        FUND_HEADERS,
+        [("渠道 A", "日期待确认", 90, 3.25)],
+    )
+
+    with pytest.raises(WorkbookDataError, match="信容付款日期.*日期待确认"):
+        read_funds(path, {2026})
 
 
 def test_read_operations_rejects_formula_without_cached_result(tmp_path: Path) -> None:

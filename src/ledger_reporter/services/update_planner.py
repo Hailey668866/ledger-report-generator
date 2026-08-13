@@ -19,9 +19,7 @@ def _periods_after(day: date, through: ReportingPeriod) -> tuple[ReportingPeriod
     return tuple(periods)
 
 
-def plan_updates(
-    today: date, existing: set[ReportingPeriod], frozen_through: date
-) -> UpdatePlan:
+def plan_updates(today: date, existing: set[ReportingPeriod], frozen_through: date) -> UpdatePlan:
     latest = latest_completed_week(today)
     expected = _periods_after(frozen_through, latest)
     new_periods = tuple(period for period in expected if period not in existing)

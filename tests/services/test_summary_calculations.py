@@ -18,9 +18,7 @@ def op(kind: str, profit: str) -> OperationalRecord:
 
 def test_calculates_summary_columns() -> None:
     funds = [
-        FundRecord(
-            "广州美鑫通国际供应链有限公司", date(2026, 8, 4), Decimal(10000), Decimal(20)
-        )
+        FundRecord("广州美鑫通国际供应链有限公司", date(2026, 8, 4), Decimal(10000), Decimal(20))
     ]
 
     metrics = calculate_period(PERIOD, [op("BSA", "100"), op("散采", "30")], funds)
@@ -73,9 +71,7 @@ def test_empty_inputs_return_zero_core_metrics() -> None:
 
 def test_accepts_single_use_iterators() -> None:
     funds = [
-        FundRecord(
-            "广州美鑫通国际供应链有限公司", date(2026, 8, 4), Decimal(100), Decimal(20)
-        )
+        FundRecord("广州美鑫通国际供应链有限公司", date(2026, 8, 4), Decimal(100), Decimal(20))
     ]
 
     metrics = calculate_period(PERIOD, iter([op("BSA", "10")]), iter(funds))
@@ -90,9 +86,13 @@ def test_accepts_single_use_iterators() -> None:
 
 def test_uses_inclusive_dates_and_both_configured_fund_rates() -> None:
     operations = [
-        OperationalRecord("start", "项目", "OSL", date(2026, 8, 1), "供应商", Decimal(1), Decimal(2)),
+        OperationalRecord(
+            "start", "项目", "OSL", date(2026, 8, 1), "供应商", Decimal(1), Decimal(2)
+        ),
         OperationalRecord("end", "散采", "OSL", date(2026, 8, 6), "供应商", Decimal(1), Decimal(3)),
-        OperationalRecord("after", "项目", "OSL", date(2026, 8, 7), "供应商", Decimal(1), Decimal(99)),
+        OperationalRecord(
+            "after", "项目", "OSL", date(2026, 8, 7), "供应商", Decimal(1), Decimal(99)
+        ),
         OperationalRecord(None, "项目", "OSL", date(2026, 8, 3), "供应商", Decimal(1), Decimal(4)),
     ]
     funds = [
