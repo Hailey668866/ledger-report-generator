@@ -4,6 +4,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -163,6 +164,20 @@ QTableWidget#previewTable {
     gridline-color: #b7c0bb;
 }
 """
+
+
+def _choose_png_output_directory(parent: QWidget) -> Path | None:
+    dialog = QFileDialog(parent, "选择图片保存文件夹")
+    dialog.setFileMode(QFileDialog.FileMode.Directory)
+    dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+    dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+    dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+    dialog.setLabelText(QFileDialog.DialogLabel.Accept, "选择此文件夹")
+    dialog.setLabelText(QFileDialog.DialogLabel.Reject, "取消")
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    selected = dialog.selectedFiles()
+    return Path(selected[0]) if selected else None
 
 
 class MainWindow(QMainWindow):
@@ -526,10 +541,9 @@ class MainWindow(QMainWindow):
     def export_png_files(self) -> None:
         if self.bundle is None:
             return
-        value = QFileDialog.getExistingDirectory(self, "选择图片保存文件夹")
-        if not value:
+        path = _choose_png_output_directory(self)
+        if path is None:
             return
-        path = Path(value)
         try:
             export_pngs(self.bundle, path)
         except Exception as exc:  # noqa: BLE001 - UI boundary reports exporter failures.

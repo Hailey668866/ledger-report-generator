@@ -2,8 +2,10 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QThread
+from PySide6.QtWidgets import QDialog, QFileDialog
 
 from ledger_reporter.domain.models import SourceInspection, UpdatePlan
+from ledger_reporter.ui import main_window as main_window_module
 from ledger_reporter.ui.fonts import ui_font_family
 from ledger_reporter.ui.main_window import MainWindow
 from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
@@ -182,8 +184,8 @@ def test_export_dialogs_cancel_cleanly_and_pass_selected_paths(
         lambda *_args: ("", ""),
     )
     monkeypatch.setattr(
-        "ledger_reporter.ui.main_window.QFileDialog.getExistingDirectory",
-        lambda *_args: "",
+        "ledger_reporter.ui.main_window._choose_png_output_directory",
+        lambda *_args: None,
     )
     window.export_excel_file()
     window.export_png_files()
@@ -197,13 +199,40 @@ def test_export_dialogs_cancel_cleanly_and_pass_selected_paths(
         lambda *_args: (str(excel_path), ""),
     )
     monkeypatch.setattr(
-        "ledger_reporter.ui.main_window.QFileDialog.getExistingDirectory",
-        lambda *_args: str(png_directory),
+        "ledger_reporter.ui.main_window._choose_png_output_directory",
+        lambda *_args: png_directory,
     )
     window.export_excel_file()
     window.export_png_files()
     assert excel_calls == [(report_bundle, excel_path.with_suffix(".xlsx"))]
     assert png_calls == [(report_bundle, png_directory)]
+
+
+def test_png_export_chooser_is_an_explicit_folder_only_dialog(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_report_service,
+) -> None:
+    dialogs: list[QFileDialog] = []
+    window = MainWindow(fake_report_service)
+    qtbot.addWidget(window)
+    monkeypatch.setattr(
+        QFileDialog,
+        "exec",
+        lambda dialog: dialogs.append(dialog) or QDialog.DialogCode.Accepted,
+    )
+    monkeypatch.setattr(QFileDialog, "selectedFiles", lambda _dialog: [str(tmp_path)])
+
+    selected = main_window_module._choose_png_output_directory(window)
+
+    assert selected == tmp_path
+    assert len(dialogs) == 1
+    dialog = dialogs[0]
+    assert dialog.fileMode() == QFileDialog.FileMode.Directory
+    assert dialog.testOption(QFileDialog.Option.ShowDirsOnly)
+    assert dialog.testOption(QFileDialog.Option.DontUseNativeDialog)
+    assert dialog.labelText(QFileDialog.DialogLabel.Accept) == "选择此文件夹"
 
 
 def test_generation_failure_resets_status_and_shows_message(
