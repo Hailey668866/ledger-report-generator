@@ -11,6 +11,7 @@ from ledger_reporter.domain.models import (
     WeekSnapshot,
 )
 from ledger_reporter.domain.periods import fiscal_year_for
+from ledger_reporter.io.source_settings import DEFAULT_SOURCE_SETTINGS, SourceSettings
 from ledger_reporter.io.workbooks import read_funds, read_operations
 from ledger_reporter.services.baseline import Baseline, load_fy2026_baseline
 from ledger_reporter.services.calculations import (
@@ -28,8 +29,18 @@ IN_MEMORY_SUMMARY: dict[str, object] = {
 
 
 class ReportService:
-    def __init__(self, history: HistoryRepository) -> None:
+    def __init__(
+        self,
+        history: HistoryRepository,
+        source_settings: SourceSettings = DEFAULT_SOURCE_SETTINGS,
+    ) -> None:
+        source_settings.validate()
         self.history = history
+        self.source_settings = source_settings
+
+    def set_source_settings(self, settings: SourceSettings) -> None:
+        settings.validate()
+        self.source_settings = settings
 
     def _plan(self, today: date) -> tuple[int, Baseline, UpdatePlan]:
         fiscal_year = fiscal_year_for(today)
@@ -53,9 +64,14 @@ class ReportService:
         operations_path: Path,
         today: date,
     ) -> SourceInspection:
+        settings = self.source_settings
         fiscal_year, _baseline, update_plan = self._plan(today)
-        operations = read_operations(operations_path)
-        funds = read_funds(funds_path, {fiscal_year, fiscal_year + 1})
+        operations = read_operations(operations_path, settings)
+        funds = read_funds(
+            funds_path,
+            {fiscal_year, fiscal_year + 1},
+            settings,
+        )
 
         for period in update_plan.periods:
             calculate_period(period, operations, funds)
@@ -126,9 +142,14 @@ class ReportService:
         operations_path: Path,
         today: date,
     ) -> ReportBundle:
+        settings = self.source_settings
         fiscal_year = fiscal_year_for(today)
-        operations = read_operations(operations_path)
-        funds = read_funds(funds_path, {fiscal_year, fiscal_year + 1})
+        operations = read_operations(operations_path, settings)
+        funds = read_funds(
+            funds_path,
+            {fiscal_year, fiscal_year + 1},
+            settings,
+        )
         return self.generate_from_records(
             today,
             operations,

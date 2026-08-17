@@ -1,9 +1,8 @@
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import zip_longest
 from pathlib import Path
-from re import compile as re_compile
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
 
@@ -13,18 +12,28 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from ledger_reporter.domain.models import FundRecord, OperationalRecord
 from ledger_reporter.io.errors import WorkbookDataError
+from ledger_reporter.io.source_settings import DEFAULT_SOURCE_SETTINGS, SourceSettings
 
-OPS_HEADERS = (
-    "提单号",
-    "项目类型",
-    "目的口岸",
-    "预计起飞时间",
-    "B1供应商",
-    "预估总应收",
-    "预估毛利润",
-)
-FUND_HEADERS = ("渠道名称", "信容付款日期", "付款金额合计（90%）", "应收操作费")
-FUND_SHEET_PATTERN = re_compile(r"资金散板汇总\d{4}")
+
+def _operations_headers(settings: SourceSettings) -> dict[str, str]:
+    return {
+        "提单号": settings.operations_bill_no,
+        "项目类型": settings.operations_project_type,
+        "目的口岸": settings.operations_destination,
+        "预计起飞时间": settings.operations_departure,
+        "B1供应商": settings.operations_supplier,
+        "预估总应收": settings.operations_receivable,
+        "预估毛利润": settings.operations_gross_profit,
+    }
+
+
+def _fund_headers(settings: SourceSettings) -> dict[str, str]:
+    return {
+        "渠道名称": settings.funds_channel,
+        "信容付款日期": settings.funds_payment_date,
+        "付款金额合计（90%）": settings.funds_amount,
+        "应收操作费": settings.funds_operation_fee,
+    }
 
 
 def _open_workbook(path: Path, data_only: bool):
@@ -67,38 +76,46 @@ def _date(value: object, label: str) -> date:
 
 
 def _header_positions(
-    headers: tuple[object, ...], required_headers: tuple[str, ...], sheet_name: str
+    headers: tuple[object, ...], required_headers: Mapping[str, str], sheet_name: str
 ) -> dict[str, int]:
     positions: dict[str, int] = {}
-    for header in required_headers:
-        matches = [index for index, value in enumerate(headers) if value == header]
+    for logical_header, actual_header in required_headers.items():
+        matches = [index for index, value in enumerate(headers) if value == actual_header]
         if len(matches) > 1:
-            raise WorkbookDataError(f"工作表「{sheet_name}」存在重复字段「{header}」。")
+            raise WorkbookDataError(f"工作表「{sheet_name}」存在重复字段「{actual_header}」。")
         if not matches:
-            raise WorkbookDataError(f"工作表「{sheet_name}」缺少必填字段「{header}」。")
-        positions[header] = matches[0]
+            raise WorkbookDataError(f"工作表「{sheet_name}」缺少必填字段「{actual_header}」。")
+        positions[logical_header] = matches[0]
     return positions
 
 
 def _validated_rows(
     cached_sheet: Worksheet,
     formula_sheet: Worksheet,
-    required_headers: tuple[str, ...],
+    required_headers: Mapping[str, str],
     numeric_headers: tuple[str, ...],
     active_date_header: str,
+    header_row: int,
     skip_row: Callable[[dict[str, object]], bool] | None = None,
 ) -> Iterator[dict[str, object]]:
     sheet_name = cached_sheet.title
     cached_rows = cached_sheet.iter_rows(values_only=True)
     formula_rows = formula_sheet.iter_rows()
     try:
-        cached_headers = next(cached_rows)
-        formula_headers = next(formula_rows)
+        for _ in range(header_row):
+            cached_headers = next(cached_rows)
+            formula_headers = next(formula_rows)
     except StopIteration:
-        raise WorkbookDataError(f"工作表「{sheet_name}」为空，无法读取表头。") from None
+        if header_row == 1:
+            raise WorkbookDataError(f"工作表「{sheet_name}」为空，无法读取表头。") from None
+        raise WorkbookDataError(
+            f"工作表「{sheet_name}」没有设置的第 {header_row} 行表头。"
+        ) from None
     cached_positions = _header_positions(cached_headers, required_headers, sheet_name)
     formula_positions = _header_positions(
-        tuple(cell.value for cell in formula_headers), numeric_headers, sheet_name
+        tuple(cell.value for cell in formula_headers),
+        {header: required_headers[header] for header in numeric_headers},
+        sheet_name,
     )
     cached_numeric_positions = {header: cached_positions[header] for header in numeric_headers}
     if cached_numeric_positions != formula_positions:
@@ -121,7 +138,8 @@ def _validated_rows(
                 cached_value = cached_row[cached_positions[header]]
                 if formula_cell.data_type == "f" and cached_value is None:
                     raise WorkbookDataError(
-                        f"工作表「{sheet_name}」字段「{header}」的公式没有缓存结果。"
+                        f"工作表「{sheet_name}」字段「{required_headers[header]}」"
+                        "的公式没有缓存结果。"
                         "请用 Excel 或 WPS 重新计算后保存该工作簿，再重新导入。"
                     )
         yield row
@@ -161,19 +179,22 @@ def _is_not_disbursed(row: dict[str, object]) -> bool:
     return row["信容付款日期"] == "未放款"
 
 
-def _read_operations(path: Path) -> list[OperationalRecord]:
+def _read_operations(path: Path, settings: SourceSettings) -> list[OperationalRecord]:
     source = Path(path)
     cached_book, formula_book = _open_workbook_views(source)
     try:
-        worksheet, formula_sheet = _sheet_pair(cached_book, formula_book, source, "台账明细")
+        worksheet, formula_sheet = _sheet_pair(
+            cached_book, formula_book, source, settings.operations_sheet
+        )
 
         records: list[OperationalRecord] = []
         for row in _validated_rows(
             worksheet,
             formula_sheet,
-            OPS_HEADERS,
+            _operations_headers(settings),
             ("预估总应收", "预估毛利润"),
             "预计起飞时间",
+            settings.operations_header_row,
             _is_product_table_metadata,
         ):
             departure_value = row["预计起飞时间"]
@@ -184,10 +205,10 @@ def _read_operations(path: Path) -> list[OperationalRecord]:
                     bill_no=_optional_text(row["提单号"]),
                     project_type=_optional_text(row["项目类型"]),
                     destination=_optional_text(row["目的口岸"]),
-                    departure=_date(departure_value, "预计起飞时间"),
+                    departure=_date(departure_value, settings.operations_departure),
                     supplier=_optional_text(row["B1供应商"]),
-                    receivable=_decimal(row["预估总应收"], "预估总应收"),
-                    gross_profit=_decimal(row["预估毛利润"], "预估毛利润"),
+                    receivable=_decimal(row["预估总应收"], settings.operations_receivable),
+                    gross_profit=_decimal(row["预估毛利润"], settings.operations_gross_profit),
                 )
             )
         return records
@@ -196,20 +217,26 @@ def _read_operations(path: Path) -> list[OperationalRecord]:
         cached_book.close()
 
 
-def _read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
+def _read_funds(
+    path: Path, allowed_years: Iterable[int], settings: SourceSettings
+) -> list[FundRecord]:
     source = Path(path)
-    allowed_years = set(allowed_years)
+    allowed_years = sorted(set(allowed_years))
+    if "{年份}" in settings.funds_sheet and not allowed_years:
+        raise WorkbookDataError("未指定资金工作表年份。")
     cached_book, formula_book = _open_workbook_views(source)
     try:
-        selected_sheets = [
-            name
-            for name in cached_book.sheetnames
-            if FUND_SHEET_PATTERN.fullmatch(name) and int(name[-4:]) in allowed_years
-        ]
+        if "{年份}" in settings.funds_sheet:
+            candidates = [
+                settings.funds_sheet.replace("{年份}", str(year)) for year in allowed_years
+            ]
+        else:
+            candidates = [settings.funds_sheet]
+        selected_sheets = [name for name in candidates if name in cached_book.sheetnames]
         if not selected_sheets:
-            years_text = "、".join(str(year) for year in sorted(allowed_years))
+            candidates_text = "、".join(f"「{name}」" for name in candidates)
             raise WorkbookDataError(
-                f"工作簿「{source}」未找到资金散板汇总工作表（请求年度：{years_text}）。"
+                f"工作簿「{source}」未找到设置的资金工作表：{candidates_text}。"
             )
 
         records: list[FundRecord] = []
@@ -218,9 +245,10 @@ def _read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
             for row in _validated_rows(
                 worksheet,
                 formula_sheet,
-                FUND_HEADERS,
+                _fund_headers(settings),
                 ("付款金额合计（90%）", "应收操作费"),
                 "信容付款日期",
+                settings.funds_header_row,
                 _is_not_disbursed,
             ):
                 payment_date = row["信容付款日期"]
@@ -230,9 +258,9 @@ def _read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
                 records.append(
                     FundRecord(
                         channel=channel or "",
-                        payment_date=_date(payment_date, "信容付款日期"),
-                        amount=_decimal(row["付款金额合计（90%）"], "付款金额合计（90%）"),
-                        operation_fee=_decimal(row["应收操作费"], "应收操作费"),
+                        payment_date=_date(payment_date, settings.funds_payment_date),
+                        amount=_decimal(row["付款金额合计（90%）"], settings.funds_amount),
+                        operation_fee=_decimal(row["应收操作费"], settings.funds_operation_fee),
                     )
                 )
         return records
@@ -241,20 +269,28 @@ def _read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
         cached_book.close()
 
 
-def read_operations(path: Path) -> list[OperationalRecord]:
+def read_operations(
+    path: Path, settings: SourceSettings = DEFAULT_SOURCE_SETTINGS
+) -> list[OperationalRecord]:
+    settings.validate()
     source = Path(path)
     try:
-        return _read_operations(source)
+        return _read_operations(source, settings)
     except WorkbookDataError:
         raise
     except (BadZipFile, KeyError, ParseError, ValueError):
         raise WorkbookDataError(f"文件「{source}」不是有效的 XLSX 工作簿。") from None
 
 
-def read_funds(path: Path, allowed_years: Iterable[int]) -> list[FundRecord]:
+def read_funds(
+    path: Path,
+    allowed_years: Iterable[int],
+    settings: SourceSettings = DEFAULT_SOURCE_SETTINGS,
+) -> list[FundRecord]:
+    settings.validate()
     source = Path(path)
     try:
-        return _read_funds(source, allowed_years)
+        return _read_funds(source, allowed_years, settings)
     except WorkbookDataError:
         raise
     except (BadZipFile, KeyError, ParseError, ValueError):

@@ -15,6 +15,7 @@ from ledger_reporter.domain.models import (
     WeekSnapshot,
 )
 from ledger_reporter.io.errors import WorkbookDataError
+from ledger_reporter.io.source_settings import SourceSettings
 from ledger_reporter.rules import BUSINESS_RULES
 from ledger_reporter.services.baseline import load_fy2026_baseline
 from ledger_reporter.services.history import HistoryRepository
@@ -143,15 +144,33 @@ def test_inspection_validates_records_and_never_changes_history(
     history = HistoryRepository(tmp_path / "history.sqlite3")
     old_week = _snapshot()
     history.save_weeks([old_week])
-    service = ReportService(history)
+    settings = SourceSettings(operations_sheet="运营数据")
+    replacement = SourceSettings(operations_sheet="替换后的运营数据")
+    service = ReportService(history, settings)
     operations = [_operation("latest", date(2026, 8, 8), "15")]
     funds = [_fund(date(2026, 8, 8))]
+    captured: dict[str, object] = {}
+
+    def fake_read_operations(_path: Path, received_settings: SourceSettings):
+        captured["operations_settings"] = received_settings
+        service.set_source_settings(replacement)
+        return operations
+
+    def fake_read_funds(
+        _path: Path,
+        allowed_years: set[int],
+        received_settings: SourceSettings,
+    ):
+        captured["allowed_years"] = allowed_years
+        captured["funds_settings"] = received_settings
+        return funds
+
     monkeypatch.setattr(
-        "ledger_reporter.services.report_service.read_operations", lambda _path: operations
+        "ledger_reporter.services.report_service.read_operations", fake_read_operations
     )
     monkeypatch.setattr(
         "ledger_reporter.services.report_service.read_funds",
-        lambda _path, _years: funds,
+        fake_read_funds,
     )
     before_weeks = history.load_weeks(2026)
     before_generation = history.latest_generation(2026)
@@ -164,6 +183,10 @@ def test_inspection_validates_records_and_never_changes_history(
 
     assert inspection.fiscal_year == 2026
     assert inspection.update_plan.latest.start == date(2026, 8, 7)
+    assert captured["operations_settings"] is settings
+    assert captured["funds_settings"] is settings
+    assert captured["allowed_years"] == {2026, 2027}
+    assert service.source_settings is replacement
     assert history.load_weeks(2026) == before_weeks
     assert history.latest_generation(2026) == before_generation
 
@@ -177,10 +200,13 @@ def test_inspection_propagates_validation_error_without_changing_history(
     history.save_weeks([old_week])
     service = ReportService(history)
     invalid_funds = [FundRecord("未知渠道", date(2026, 8, 8), Decimal(1), Decimal(0))]
-    monkeypatch.setattr("ledger_reporter.services.report_service.read_operations", lambda _path: [])
+    monkeypatch.setattr(
+        "ledger_reporter.services.report_service.read_operations",
+        lambda _path, _settings: [],
+    )
     monkeypatch.setattr(
         "ledger_reporter.services.report_service.read_funds",
-        lambda _path, _years: invalid_funds,
+        lambda _path, _years, _settings: invalid_funds,
     )
     before_weeks = history.load_weeks(2026)
 
@@ -366,15 +392,26 @@ def test_generate_reads_expected_years_and_passes_real_summaries(
     funds = [_fund(date(2027, 4, 2))]
     captured: dict[str, object] = {}
     marker = object()
-    service = ReportService(HistoryRepository(tmp_path / "history.sqlite3"))
+    settings = SourceSettings(funds_sheet="资金数据{年份}")
+    replacement = SourceSettings(funds_sheet="替换后的资金数据{年份}")
+    service = ReportService(HistoryRepository(tmp_path / "history.sqlite3"), settings)
 
-    def fake_read_operations(path: Path) -> list[OperationalRecord]:
+    def fake_read_operations(
+        path: Path, received_settings: SourceSettings
+    ) -> list[OperationalRecord]:
         captured["operations_path"] = path
+        captured["operations_settings"] = received_settings
+        service.set_source_settings(replacement)
         return operations
 
-    def fake_read_funds(path: Path, allowed_years: set[int]) -> list[FundRecord]:
+    def fake_read_funds(
+        path: Path,
+        allowed_years: set[int],
+        received_settings: SourceSettings,
+    ) -> list[FundRecord]:
         captured["funds_path"] = path
         captured["allowed_years"] = allowed_years
+        captured["funds_settings"] = received_settings
         return funds
 
     def fake_generate_from_records(
@@ -400,7 +437,10 @@ def test_generate_reads_expected_years_and_passes_real_summaries(
     assert result is marker
     assert captured["operations_path"] == operations_path
     assert captured["funds_path"] == funds_path
+    assert captured["operations_settings"] is settings
+    assert captured["funds_settings"] is settings
     assert captured["allowed_years"] == {2027, 2028}
+    assert service.source_settings is replacement
     assert captured["today"] == date(2027, 4, 9)
     assert captured["operations"] is operations
     assert captured["funds"] is funds
@@ -414,6 +454,27 @@ def test_generate_reads_expected_years_and_passes_real_summaries(
         "size": len(operations_bytes),
         "sha256": sha256(operations_bytes).hexdigest(),
     }
+
+
+def test_source_settings_are_validated_before_replacing_current_settings(tmp_path: Path) -> None:
+    service = ReportService(HistoryRepository(tmp_path / "history.sqlite3"))
+    valid = SourceSettings(operations_sheet="运营数据")
+
+    service.set_source_settings(valid)
+
+    assert service.source_settings is valid
+
+    with pytest.raises(ValueError, match="表头行"):
+        service.set_source_settings(SourceSettings(operations_header_row=0))
+
+    assert service.source_settings is valid
+
+
+def test_constructor_rejects_invalid_source_settings(tmp_path: Path) -> None:
+    history = HistoryRepository(tmp_path / "history.sqlite3")
+
+    with pytest.raises(ValueError, match="表头行"):
+        ReportService(history, SourceSettings(funds_header_row=0))
 
 
 def test_shared_report_bundle_fixture_has_export_ready_structure(

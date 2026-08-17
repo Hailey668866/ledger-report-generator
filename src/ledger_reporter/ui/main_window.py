@@ -21,9 +21,11 @@ from ledger_reporter.app_paths import resource_path
 from ledger_reporter.domain.models import ReportBundle, SourceInspection
 from ledger_reporter.exporters.excel import export_excel
 from ledger_reporter.exporters.png import export_pngs
+from ledger_reporter.io.source_settings import save_source_settings
 from ledger_reporter.ui.fonts import ui_font
 from ledger_reporter.ui.preview_dialog import PreviewDialog
 from ledger_reporter.ui.source_picker import SourcePicker
+from ledger_reporter.ui.source_settings_dialog import SourceSettingsDialog
 from ledger_reporter.ui.uninstall_dialog import UninstallDialog
 from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
 from ledger_reporter.uninstall import default_uninstall_targets
@@ -181,9 +183,14 @@ def _choose_png_output_directory(parent: QWidget) -> Path | None:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, report_service: object) -> None:
+    def __init__(
+        self,
+        report_service: object,
+        source_settings_path: Path | None = None,
+    ) -> None:
         super().__init__()
         self.report_service = report_service
+        self.source_settings_path = source_settings_path
         self.bundle: ReportBundle | None = None
         self.inspection: SourceInspection | None = None
         self.validation_thread: QThread | None = None
@@ -202,6 +209,8 @@ class MainWindow(QMainWindow):
         self.validate_button.setIcon(
             self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
         )
+        self.source_settings_button = QPushButton("字段设置")
+        self.source_settings_button.setObjectName("secondaryButton")
         self.generate_button = QPushButton("生成两张报表")
         self.generate_button.setObjectName("generateButton")
         self.generate_button.setMinimumHeight(42)
@@ -280,7 +289,11 @@ class MainWindow(QMainWindow):
         body_layout.setSpacing(11)
         source_title = QLabel("数据源")
         source_title.setObjectName("sectionTitle")
-        body_layout.addWidget(source_title)
+        source_title_row = QHBoxLayout()
+        source_title_row.addWidget(source_title)
+        source_title_row.addStretch(1)
+        source_title_row.addWidget(self.source_settings_button)
+        body_layout.addLayout(source_title_row)
         body_layout.addWidget(self.funds_picker)
         body_layout.addWidget(self.operations_picker)
 
@@ -333,6 +346,7 @@ class MainWindow(QMainWindow):
         self.funds_picker.path_changed.connect(self.refresh_ready)
         self.operations_picker.path_changed.connect(self.refresh_ready)
         self.validate_button.clicked.connect(self.start_validation)
+        self.source_settings_button.clicked.connect(self.open_source_settings)
         self.generate_button.clicked.connect(self.start_generation)
         self.preview_button.clicked.connect(self.open_preview)
         self.excel_button.clicked.connect(self.export_excel_file)
@@ -370,6 +384,7 @@ class MainWindow(QMainWindow):
     def _set_source_pickers_enabled(self, enabled: bool) -> None:
         self.funds_picker.setEnabled(enabled)
         self.operations_picker.setEnabled(enabled)
+        self.source_settings_button.setEnabled(enabled)
 
     def _disable_result_actions(self) -> None:
         for button in (self.preview_button, self.excel_button, self.png_button):
@@ -514,6 +529,27 @@ class MainWindow(QMainWindow):
     def open_preview(self) -> None:
         if self.bundle is not None:
             PreviewDialog(self.bundle, self).exec()
+
+    def open_source_settings(self) -> None:
+        dialog = SourceSettingsDialog(self.report_service.source_settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        settings = dialog.selected_settings
+        assert settings is not None
+        if self.source_settings_path is not None:
+            try:
+                save_source_settings(self.source_settings_path, settings)
+            except Exception as exc:  # noqa: BLE001 - UI boundary reports persistence failures.
+                QMessageBox.critical(
+                    self,
+                    "字段设置保存失败",
+                    str(exc) or exc.__class__.__name__,
+                )
+                return
+        self.report_service.set_source_settings(settings)
+        self.refresh_ready()
+        if self._sources_ready():
+            self.start_validation()
 
     def export_excel_file(self) -> None:
         if self.bundle is None:

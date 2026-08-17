@@ -5,10 +5,14 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QDialog, QFileDialog
 
 from ledger_reporter.domain.models import SourceInspection, UpdatePlan
+from ledger_reporter.io.source_settings import SourceSettings, load_source_settings
 from ledger_reporter.ui import main_window as main_window_module
 from ledger_reporter.ui.fonts import ui_font_family
 from ledger_reporter.ui.main_window import MainWindow
 from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
+
+
+CUSTOM_SOURCE_SETTINGS = SourceSettings(funds_sheet="资金数据{年份}")
 
 
 class FakeReportService:
@@ -16,6 +20,10 @@ class FakeReportService:
         self.bundle = bundle
         self.generation_error: Exception | None = None
         self.validation_error: Exception | None = None
+        self.source_settings = SourceSettings()
+
+    def set_source_settings(self, settings: SourceSettings) -> None:
+        self.source_settings = settings
 
     def generate(self, funds: Path, operations: Path, today):
         if self.generation_error:
@@ -45,6 +53,32 @@ def _select_sources(window: MainWindow, tmp_path: Path) -> tuple[Path, Path]:
     window.funds_picker.set_path(funds)
     window.operations_picker.set_path(operations)
     return funds, operations
+
+
+def _use_source_settings_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+    result: QDialog.DialogCode,
+    created: list[tuple[SourceSettings, object]] | None = None,
+) -> None:
+    class FakeSourceSettingsDialog:
+        selected_settings = CUSTOM_SOURCE_SETTINGS
+
+        def __init__(self, current: SourceSettings, parent: object) -> None:
+            if created is not None:
+                created.append((current, parent))
+
+        def exec(self) -> QDialog.DialogCode:
+            return result
+
+    monkeypatch.setattr(main_window_module, "SourceSettingsDialog", FakeSourceSettingsDialog)
+
+
+def _show_generated_results(window: MainWindow, report_bundle) -> SourceInspection:
+    period = report_bundle.latest_period
+    inspection = SourceInspection(2026, UpdatePlan(period, (period,), ()))
+    window.on_validation_succeeded(inspection)
+    window.on_generation_succeeded(report_bundle)
+    return inspection
 
 
 def test_generate_requires_two_existing_sources_and_a_current_validation(
@@ -94,6 +128,157 @@ def test_window_matches_approved_collapsed_preview_layout(qtbot, fake_report_ser
     assert window.period_panel.isHidden()
     assert window.result_bar.isHidden()
     assert window.generate_button.minimumHeight() == 42
+
+
+def test_field_settings_button_is_on_source_title_row_and_opens_current_settings(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_report_service,
+) -> None:
+    created: list[tuple[SourceSettings, object]] = []
+    _use_source_settings_dialog(monkeypatch, QDialog.DialogCode.Rejected, created)
+    window = MainWindow(fake_report_service)
+    qtbot.addWidget(window)
+
+    source_row = window.funds_picker.parentWidget().layout().itemAt(0).layout()
+    assert source_row.itemAt(0).widget().text() == "数据源"
+    assert source_row.itemAt(source_row.count() - 1).widget() is window.source_settings_button
+    assert window.source_settings_button.text() == "字段设置"
+
+    window.source_settings_button.click()
+
+    assert created == [(fake_report_service.source_settings, window)]
+
+
+def test_accepted_field_settings_are_saved_applied_and_revalidated(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_report_service,
+    report_bundle,
+) -> None:
+    settings_path = tmp_path / "source-settings.json"
+    _use_source_settings_dialog(monkeypatch, QDialog.DialogCode.Accepted)
+    window = MainWindow(fake_report_service, settings_path)
+    qtbot.addWidget(window)
+    _select_sources(window, tmp_path)
+    _show_generated_results(window, report_bundle)
+    validation_calls: list[bool] = []
+    monkeypatch.setattr(window, "start_validation", lambda: validation_calls.append(True))
+
+    window.open_source_settings()
+
+    assert load_source_settings(settings_path) == CUSTOM_SOURCE_SETTINGS
+    assert fake_report_service.source_settings == CUSTOM_SOURCE_SETTINGS
+    assert window.bundle is None
+    assert window.inspection is None
+    assert window.period_panel.isHidden()
+    assert window.plan_detail_label.isHidden()
+    assert window.result_bar.isHidden()
+    assert validation_calls == [True]
+
+
+def test_cancelled_field_settings_leave_service_and_results_unchanged(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_report_service,
+    report_bundle,
+) -> None:
+    _use_source_settings_dialog(monkeypatch, QDialog.DialogCode.Rejected)
+    window = MainWindow(fake_report_service, tmp_path / "source-settings.json")
+    qtbot.addWidget(window)
+    _select_sources(window, tmp_path)
+    inspection = _show_generated_results(window, report_bundle)
+    old_status = window.status_label.text()
+    validation_calls: list[bool] = []
+    monkeypatch.setattr(window, "start_validation", lambda: validation_calls.append(True))
+
+    window.open_source_settings()
+
+    assert fake_report_service.source_settings == SourceSettings()
+    assert window.bundle is report_bundle
+    assert window.inspection is inspection
+    assert not window.period_panel.isHidden()
+    assert not window.result_bar.isHidden()
+    assert window.status_label.text() == old_status
+    assert validation_calls == []
+
+
+def test_field_settings_save_failure_preserves_service_and_results(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_report_service,
+    report_bundle,
+) -> None:
+    messages: list[tuple[str, str]] = []
+    _use_source_settings_dialog(monkeypatch, QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(
+        main_window_module,
+        "save_source_settings",
+        lambda *_args: (_ for _ in ()).throw(PermissionError("目录不可写")),
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "critical",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+    window = MainWindow(fake_report_service, tmp_path / "source-settings.json")
+    qtbot.addWidget(window)
+    _select_sources(window, tmp_path)
+    inspection = _show_generated_results(window, report_bundle)
+    old_status = window.status_label.text()
+    validation_calls: list[bool] = []
+    monkeypatch.setattr(window, "start_validation", lambda: validation_calls.append(True))
+
+    window.open_source_settings()
+
+    assert fake_report_service.source_settings == SourceSettings()
+    assert window.bundle is report_bundle
+    assert window.inspection is inspection
+    assert not window.period_panel.isHidden()
+    assert not window.result_bar.isHidden()
+    assert window.status_label.text() == old_status
+    assert validation_calls == []
+    assert messages == [("字段设置保存失败", "目录不可写")]
+
+
+def test_accepted_field_settings_with_one_source_are_saved_without_validation(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    fake_report_service,
+) -> None:
+    settings_path = tmp_path / "source-settings.json"
+    _use_source_settings_dialog(monkeypatch, QDialog.DialogCode.Accepted)
+    window = MainWindow(fake_report_service, settings_path)
+    qtbot.addWidget(window)
+    funds = tmp_path / "funds.xlsx"
+    funds.touch()
+    window.funds_picker.set_path(funds)
+    validation_calls: list[bool] = []
+    monkeypatch.setattr(window, "start_validation", lambda: validation_calls.append(True))
+
+    window.open_source_settings()
+
+    assert load_source_settings(settings_path) == CUSTOM_SOURCE_SETTINGS
+    assert fake_report_service.source_settings == CUSTOM_SOURCE_SETTINGS
+    assert validation_calls == []
+
+
+def test_accepted_field_settings_without_a_path_are_still_applied(
+    qtbot,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_report_service,
+) -> None:
+    _use_source_settings_dialog(monkeypatch, QDialog.DialogCode.Accepted)
+    window = MainWindow(fake_report_service)
+    qtbot.addWidget(window)
+
+    window.open_source_settings()
+
+    assert fake_report_service.source_settings == CUSTOM_SOURCE_SETTINGS
 
 
 def test_validation_populates_period_cards_and_generation_omits_week_status(
@@ -311,6 +496,26 @@ def test_threaded_workflow_releases_finished_threads(
     assert window.funds_picker.isEnabled()
     assert window.operations_picker.isEnabled()
     assert window.preview_button.isEnabled()
+
+
+def test_field_settings_button_is_disabled_during_background_tasks(
+    qtbot,
+    tmp_path: Path,
+    fake_report_service,
+) -> None:
+    window = MainWindow(fake_report_service)
+    qtbot.addWidget(window)
+    _select_sources(window, tmp_path)
+
+    window.start_validation()
+    assert not window.source_settings_button.isEnabled()
+    qtbot.waitUntil(lambda: window.validation_thread is None)
+    assert window.source_settings_button.isEnabled()
+
+    window.start_generation()
+    assert not window.source_settings_button.isEnabled()
+    qtbot.waitUntil(lambda: window.generation_thread is None)
+    assert window.source_settings_button.isEnabled()
 
 
 def test_controls_stay_disabled_until_all_background_threads_finish(
