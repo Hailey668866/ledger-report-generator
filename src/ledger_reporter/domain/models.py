@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 
@@ -34,6 +34,7 @@ class OperationalRecord:
     supplier: str | None
     receivable: Decimal
     gross_profit: Decimal
+    values: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +43,7 @@ class FundRecord:
     payment_date: date
     amount: Decimal
     operation_fee: Decimal
+    values: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,9 +75,14 @@ class BusinessMetric:
     count: int
     profit: Decimal
     receivable: Decimal
+    calculated_margin: Decimal | None = None
+    cycle: str | None = None
+    measured_rate: str | None = None
 
     @property
     def margin(self) -> Decimal | None:
+        if self.calculated_margin is not None:
+            return self.calculated_margin
         return None if self.receivable == ZERO else self.profit / self.receivable
 
 

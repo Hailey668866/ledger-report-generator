@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -5,6 +6,12 @@ import pytest
 
 from ledger_reporter.domain.models import OperationalRecord, ReportingPeriod
 from ledger_reporter.services.calculations import calculate_business_table
+from ledger_reporter.io.source_settings import (
+    AggregateRule,
+    DEFAULT_SOURCE_SETTINGS,
+    FilterRule,
+    RatioRule,
+)
 
 PERIOD = ReportingPeriod(date(2026, 8, 1), date(2026, 8, 7), "W1（8.1-8.7）")
 OUZHANG = "欧展国际货运（上海）有限公司北京货运代理分公司"
@@ -258,3 +265,41 @@ def test_margin_is_decimal_ratio_when_receivable_is_nonzero() -> None:
 
     assert table.rows[0].margin == Decimal("0.25")
     assert table.total.margin == Decimal("0.25")
+
+
+def test_weekly_columns_use_independent_fields_and_filters() -> None:
+    record = operation()
+    record = replace(
+        record,
+        values={
+            "数量日期": date(2026, 8, 2),
+            "利润日期": date(2026, 8, 3),
+            "利润率日期": date(2026, 8, 4),
+            "数量供应商": "A",
+            "利润供应商": "B",
+            "利润率供应商": "C",
+            "数量编号": "001",
+            "利润金额": Decimal("25"),
+            "利润率分子": Decimal("20"),
+            "利润率分母": Decimal("80"),
+        },
+    )
+    first = DEFAULT_SOURCE_SETTINGS.business_rows[0]
+    configured = replace(
+        first,
+        count=AggregateRule("数量日期", "数量编号", (FilterRule("数量供应商", "A"),)),
+        profit=AggregateRule("利润日期", "利润金额", (FilterRule("利润供应商", "B"),)),
+        margin=RatioRule(
+            "利润率日期",
+            "利润率分子",
+            "利润率分母",
+            (FilterRule("利润率供应商", "C"),),
+        ),
+    )
+    settings = replace(DEFAULT_SOURCE_SETTINGS, business_rows=(configured,))
+
+    table = calculate_business_table(PERIOD, [record], settings)
+
+    assert table.rows[0].count == 1
+    assert table.rows[0].profit == Decimal("25")
+    assert table.rows[0].margin == Decimal("0.25")

@@ -1,18 +1,23 @@
 from pathlib import Path
+from dataclasses import replace
 
 import pytest
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QDialog, QFileDialog
 
 from ledger_reporter.domain.models import SourceInspection, UpdatePlan
-from ledger_reporter.io.source_settings import SourceSettings, load_source_settings
+from ledger_reporter.io.source_settings import (
+    DEFAULT_SOURCE_SETTINGS,
+    SourceSettings,
+    load_source_settings,
+)
 from ledger_reporter.ui import main_window as main_window_module
 from ledger_reporter.ui.fonts import ui_font_family
 from ledger_reporter.ui.main_window import MainWindow
 from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
 
 
-CUSTOM_SOURCE_SETTINGS = SourceSettings(funds_sheet="资金数据{年份}")
+CUSTOM_SOURCE_SETTINGS = replace(DEFAULT_SOURCE_SETTINGS, funds_sheet="资金数据{年份}")
 
 
 class FakeReportService:
@@ -20,7 +25,7 @@ class FakeReportService:
         self.bundle = bundle
         self.generation_error: Exception | None = None
         self.validation_error: Exception | None = None
-        self.source_settings = SourceSettings()
+        self.source_settings = DEFAULT_SOURCE_SETTINGS
 
     def set_source_settings(self, settings: SourceSettings) -> None:
         self.source_settings = settings
@@ -196,7 +201,7 @@ def test_cancelled_field_settings_leave_service_and_results_unchanged(
 
     window.open_source_settings()
 
-    assert fake_report_service.source_settings == SourceSettings()
+    assert fake_report_service.source_settings == DEFAULT_SOURCE_SETTINGS
     assert window.bundle is report_bundle
     assert window.inspection is inspection
     assert not window.period_panel.isHidden()
@@ -234,7 +239,7 @@ def test_field_settings_save_failure_preserves_service_and_results(
 
     window.open_source_settings()
 
-    assert fake_report_service.source_settings == SourceSettings()
+    assert fake_report_service.source_settings == DEFAULT_SOURCE_SETTINGS
     assert window.bundle is report_bundle
     assert window.inspection is inspection
     assert not window.period_panel.isHidden()

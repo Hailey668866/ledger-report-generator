@@ -1,11 +1,13 @@
 from datetime import date
 from decimal import Decimal
+from dataclasses import replace
 
 import pytest
 
 from ledger_reporter.domain.models import FundRecord, OperationalRecord, ReportingPeriod
 from ledger_reporter.io.errors import WorkbookDataError
 from ledger_reporter.services.calculations import calculate_period
+from ledger_reporter.io.source_settings import AggregateRule, DEFAULT_SOURCE_SETTINGS, FilterRule
 
 PERIOD = ReportingPeriod(date(2026, 8, 1), date(2026, 8, 6), "W1（8.1-8.6）")
 
@@ -112,3 +114,37 @@ def test_uses_inclusive_dates_and_both_configured_fund_rates() -> None:
         + Decimal(200) * Decimal("0.0752") * Decimal(60) / Decimal(365)
         + Decimal(2)
     )
+
+
+def test_summary_outputs_use_their_own_fields_and_filters() -> None:
+    record = OperationalRecord(
+        "legacy",
+        "legacy",
+        None,
+        date(2020, 1, 1),
+        None,
+        Decimal(0),
+        Decimal(0),
+        values={
+            "数量日期": date(2026, 8, 2),
+            "利润日期": date(2026, 8, 3),
+            "数量类型": "普通",
+            "利润类型": "项目",
+            "新订单号": "A001",
+            "新毛利": Decimal("88.5"),
+        },
+    )
+    settings = replace(
+        DEFAULT_SOURCE_SETTINGS,
+        project_count=AggregateRule(
+            "数量日期", "新订单号", (FilterRule("数量类型", "散采", exclude=True),)
+        ),
+        project_profit=AggregateRule(
+            "利润日期", "新毛利", (FilterRule("利润类型", "散采", exclude=True),)
+        ),
+    )
+
+    metrics = calculate_period(PERIOD, [record], [], settings)
+
+    assert metrics.project_count == 1
+    assert metrics.project_profit == Decimal("88.5")

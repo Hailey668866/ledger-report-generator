@@ -2,6 +2,7 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+import re
 
 from ledger_reporter.domain.models import PeriodMetrics, ReportBundle, WeekSnapshot
 from ledger_reporter.presentation.models import CellSpec, MergeSpec, TableSpec
@@ -22,6 +23,7 @@ BUSINESS_META: tuple[tuple[str, str, Decimal | str | None], ...] = (
     ("迅達航空", "26.6.1--26.12.31", Decimal("0.0692")),
     ("散采", "", None),
 )
+BUSINESS_META_BY_NAME = {name: (cycle, measured) for name, cycle, measured in BUSINESS_META}
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,11 +243,16 @@ def _business_table(bundle: ReportBundle) -> TableSpec:
     cells = [CellSpec(1, 1, title, "total")]
     headers = ("业务名称", "项目周期", "利润率测算", "完成数量", "预估利润", "预估利润率")
     cells.extend(CellSpec(2, column, value, "header") for column, value in enumerate(headers, 1))
-    metrics = {item.name: item for item in bundle.business.rows}
-    for row_number, (name, cycle, measured_rate) in enumerate(BUSINESS_META, 3):
-        metric = metrics[name]
+    for row_number, metric in enumerate(bundle.business.rows, 3):
+        fallback_cycle, fallback_rate = BUSINESS_META_BY_NAME.get(metric.name, ("", None))
+        cycle = fallback_cycle if metric.cycle is None else metric.cycle
+        measured_rate: Decimal | str | None = fallback_rate
+        if metric.measured_rate is not None:
+            text = metric.measured_rate.strip()
+            match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)%", text)
+            measured_rate = Decimal(match.group(1)) / 100 if match else text or None
         values = (
-            name,
+            metric.name,
             cycle,
             measured_rate,
             metric.count,
@@ -264,7 +271,7 @@ def _business_table(bundle: ReportBundle) -> TableSpec:
             CellSpec(row_number, column, value, "body", formats[column - 1])
             for column, value in enumerate(values, 1)
         )
-    total_row = 3 + len(BUSINESS_META)
+    total_row = 3 + len(bundle.business.rows)
     total = bundle.business.total
     total_values = (
         f"销售额合计：{total.receivable / TEN_THOUSAND:.0f}",

@@ -74,8 +74,8 @@ class ReportService:
         )
 
         for period in update_plan.periods:
-            calculate_period(period, operations, funds)
-        calculate_business_table(update_plan.latest, operations)
+            calculate_period(period, operations, funds, settings)
+        calculate_business_table(update_plan.latest, operations, settings)
 
         return SourceInspection(fiscal_year, update_plan)
 
@@ -94,11 +94,11 @@ class ReportService:
             WeekSnapshot(
                 fiscal_year,
                 period,
-                calculate_period(period, operations, funds),
+                calculate_period(period, operations, funds, self.source_settings),
             )
             for period in update_plan.periods
         )
-        business = calculate_business_table(update_plan.latest, operations)
+        business = calculate_business_table(update_plan.latest, operations, self.source_settings)
 
         actual_generated_at = generated_at or datetime.now().astimezone()
         actual_funds_summary = IN_MEMORY_SUMMARY.copy() if funds_summary is None else funds_summary

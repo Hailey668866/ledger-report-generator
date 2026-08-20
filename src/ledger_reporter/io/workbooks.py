@@ -1,4 +1,4 @@
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from itertools import zip_longest
@@ -13,27 +13,6 @@ from openpyxl.worksheet.worksheet import Worksheet
 from ledger_reporter.domain.models import FundRecord, OperationalRecord
 from ledger_reporter.io.errors import WorkbookDataError
 from ledger_reporter.io.source_settings import DEFAULT_SOURCE_SETTINGS, SourceSettings
-
-
-def _operations_headers(settings: SourceSettings) -> dict[str, str]:
-    return {
-        "提单号": settings.operations_bill_no,
-        "项目类型": settings.operations_project_type,
-        "目的口岸": settings.operations_destination,
-        "预计起飞时间": settings.operations_departure,
-        "B1供应商": settings.operations_supplier,
-        "预估总应收": settings.operations_receivable,
-        "预估毛利润": settings.operations_gross_profit,
-    }
-
-
-def _fund_headers(settings: SourceSettings) -> dict[str, str]:
-    return {
-        "渠道名称": settings.funds_channel,
-        "信容付款日期": settings.funds_payment_date,
-        "付款金额合计（90%）": settings.funds_amount,
-        "应收操作费": settings.funds_operation_fee,
-    }
 
 
 def _open_workbook(path: Path, data_only: bool):
@@ -51,8 +30,8 @@ def _open_workbook(path: Path, data_only: bool):
 
 
 def _decimal(value: object, label: str) -> Decimal:
-    if value is None or value == "":
-        return Decimal("0")  # noqa: FURB157
+    if value in (None, ""):
+        return Decimal(0)
     try:
         result = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
@@ -76,29 +55,32 @@ def _date(value: object, label: str) -> date:
 
 
 def _header_positions(
-    headers: tuple[object, ...], required_headers: Mapping[str, str], sheet_name: str
+    headers: tuple[object, ...], required: set[str], sheet: str
 ) -> dict[str, int]:
-    positions: dict[str, int] = {}
-    for logical_header, actual_header in required_headers.items():
-        matches = [index for index, value in enumerate(headers) if value == actual_header]
+    positions = {}
+    for header in sorted(required):
+        matches = [index for index, value in enumerate(headers) if value == header]
         if len(matches) > 1:
-            raise WorkbookDataError(f"工作表「{sheet_name}」存在重复字段「{actual_header}」。")
+            raise WorkbookDataError(f"工作表「{sheet}」存在重复字段「{header}」。")
         if not matches:
-            raise WorkbookDataError(f"工作表「{sheet_name}」缺少必填字段「{actual_header}」。")
-        positions[logical_header] = matches[0]
+            raise WorkbookDataError(f"工作表「{sheet}」缺少必填字段「{header}」。")
+        positions[header] = matches[0]
     return positions
+
+
+def _is_metadata(values: dict[str, object]) -> bool:
+    return "公式" in values.values() and sum(value == "产品表" for value in values.values()) >= 4
 
 
 def _validated_rows(
     cached_sheet: Worksheet,
     formula_sheet: Worksheet,
-    required_headers: Mapping[str, str],
-    numeric_headers: tuple[str, ...],
-    active_date_header: str,
+    required: set[str],
+    numeric: set[str],
+    date_fields: set[str],
     header_row: int,
     skip_row: Callable[[dict[str, object]], bool] | None = None,
 ) -> Iterator[dict[str, object]]:
-    sheet_name = cached_sheet.title
     cached_rows = cached_sheet.iter_rows(values_only=True)
     formula_rows = formula_sheet.iter_rows()
     try:
@@ -107,42 +89,37 @@ def _validated_rows(
             formula_headers = next(formula_rows)
     except StopIteration:
         if header_row == 1:
-            raise WorkbookDataError(f"工作表「{sheet_name}」为空，无法读取表头。") from None
+            raise WorkbookDataError(f"工作表「{cached_sheet.title}」为空，无法读取表头。") from None
         raise WorkbookDataError(
-            f"工作表「{sheet_name}」没有设置的第 {header_row} 行表头。"
+            f"工作表「{cached_sheet.title}」没有设置的第 {header_row} 行表头。"
         ) from None
-    cached_positions = _header_positions(cached_headers, required_headers, sheet_name)
+    cached_positions = _header_positions(cached_headers, required, cached_sheet.title)
     formula_positions = _header_positions(
-        tuple(cell.value for cell in formula_headers),
-        {header: required_headers[header] for header in numeric_headers},
-        sheet_name,
+        tuple(cell.value for cell in formula_headers), numeric, formula_sheet.title
     )
-    cached_numeric_positions = {header: cached_positions[header] for header in numeric_headers}
-    if cached_numeric_positions != formula_positions:
-        raise WorkbookDataError(f"工作表「{sheet_name}」的公式和值视图行结构不一致。")
+    if any(cached_positions[field] != index for field, index in formula_positions.items()):
+        raise WorkbookDataError(f"工作表「{cached_sheet.title}」的公式和值视图行结构不一致。")
 
     missing = object()
     for cached_row, formula_row in zip_longest(cached_rows, formula_rows, fillvalue=missing):
         if cached_row is missing or formula_row is missing:
-            raise WorkbookDataError(f"工作表「{sheet_name}」的公式和值视图行结构不一致。")
-        row = {
-            header: cached_row[index] if index < len(cached_row) else None
-            for header, index in cached_positions.items()
+            raise WorkbookDataError(f"工作表「{cached_sheet.title}」的公式和值视图行结构不一致。")
+        values = {
+            field: cached_row[index] if index < len(cached_row) else None
+            for field, index in cached_positions.items()
         }
-        if skip_row is not None and skip_row(row):
+        if skip_row is not None and skip_row(values):
             continue
-        active_date = cached_row[cached_positions[active_date_header]]
-        if active_date is not None and active_date != "":
-            for header, formula_index in formula_positions.items():
-                formula_cell = formula_row[formula_index]
-                cached_value = cached_row[cached_positions[header]]
-                if formula_cell.data_type == "f" and cached_value is None:
+        active = any(values[field] not in (None, "", "未放款") for field in date_fields)
+        if active:
+            for field in numeric:
+                cell = formula_row[formula_positions[field]]
+                if cell.data_type == "f" and values[field] is None:
                     raise WorkbookDataError(
-                        f"工作表「{sheet_name}」字段「{required_headers[header]}」"
-                        "的公式没有缓存结果。"
+                        f"工作表「{cached_sheet.title}」字段「{field}」的公式没有缓存结果。"
                         "请用 Excel 或 WPS 重新计算后保存该工作簿，再重新导入。"
                     )
-        yield row
+        yield values
 
 
 def _open_workbook_views(path: Path):
@@ -162,53 +139,52 @@ def _sheet_pair(cached_book, formula_book, path: Path, sheet_name: str):
         raise WorkbookDataError(f"工作簿「{path}」缺少工作表「{sheet_name}」。") from None
 
 
-def _optional_text(value: object) -> str | None:
+def _text(value: object) -> str | None:
     if value is None:
         return None
-    text = str(value)
-    return text if text.strip() else None
-
-
-def _is_product_table_metadata(row: dict[str, object]) -> bool:
-    return row["预估总应收"] == "公式" and all(
-        row[header] == "产品表" for header in ("提单号", "目的口岸", "预计起飞时间", "B1供应商")
-    )
-
-
-def _is_not_disbursed(row: dict[str, object]) -> bool:
-    return row["信容付款日期"] == "未放款"
+    result = str(value)
+    return result if result.strip() else None
 
 
 def _read_operations(path: Path, settings: SourceSettings) -> list[OperationalRecord]:
-    source = Path(path)
-    cached_book, formula_book = _open_workbook_views(source)
+    cached_book, formula_book = _open_workbook_views(path)
     try:
-        worksheet, formula_sheet = _sheet_pair(
-            cached_book, formula_book, source, settings.operations_sheet
-        )
-
-        records: list[OperationalRecord] = []
-        for row in _validated_rows(
-            worksheet,
-            formula_sheet,
-            _operations_headers(settings),
-            ("预估总应收", "预估毛利润"),
-            "预计起飞时间",
+        cached, formula = _sheet_pair(cached_book, formula_book, path, settings.operations_sheet)
+        records = []
+        for values in _validated_rows(
+            cached,
+            formula,
+            settings.operation_fields(),
+            settings.operation_numeric_fields(),
+            settings.operation_date_fields(),
             settings.operations_header_row,
-            _is_product_table_metadata,
+            _is_metadata,
         ):
-            departure_value = row["预计起飞时间"]
-            if departure_value is None or departure_value == "":
+            present_dates = [
+                _date(values[field], field)
+                for field in settings.operation_date_fields()
+                if values[field] not in (None, "")
+            ]
+            if not present_dates:
                 continue
+            for field in settings.operation_numeric_fields():
+                _decimal(values[field], field)
             records.append(
                 OperationalRecord(
-                    bill_no=_optional_text(row["提单号"]),
-                    project_type=_optional_text(row["项目类型"]),
-                    destination=_optional_text(row["目的口岸"]),
-                    departure=_date(departure_value, settings.operations_departure),
-                    supplier=_optional_text(row["B1供应商"]),
-                    receivable=_decimal(row["预估总应收"], settings.operations_receivable),
-                    gross_profit=_decimal(row["预估毛利润"], settings.operations_gross_profit),
+                    _text(values.get(settings.project_count.value_field)),
+                    _text(values.get(settings.scatter_count.filters[0].field)),
+                    _text(values.get("目的口岸")),
+                    present_dates[0],
+                    _text(values.get("B1供应商")),
+                    _decimal(
+                        values.get(settings.business_total.sales.value_field),
+                        settings.business_total.sales.value_field,
+                    ),
+                    _decimal(
+                        values.get(settings.project_profit.value_field),
+                        settings.project_profit.value_field,
+                    ),
+                    values,
                 )
             )
         return records
@@ -220,47 +196,53 @@ def _read_operations(path: Path, settings: SourceSettings) -> list[OperationalRe
 def _read_funds(
     path: Path, allowed_years: Iterable[int], settings: SourceSettings
 ) -> list[FundRecord]:
-    source = Path(path)
-    allowed_years = sorted(set(allowed_years))
-    if "{年份}" in settings.funds_sheet and not allowed_years:
+    years = sorted(set(allowed_years))
+    if "{年份}" in settings.funds_sheet and not years:
         raise WorkbookDataError("未指定资金工作表年份。")
-    cached_book, formula_book = _open_workbook_views(source)
+    cached_book, formula_book = _open_workbook_views(path)
     try:
-        if "{年份}" in settings.funds_sheet:
-            candidates = [
-                settings.funds_sheet.replace("{年份}", str(year)) for year in allowed_years
-            ]
-        else:
-            candidates = [settings.funds_sheet]
-        selected_sheets = [name for name in candidates if name in cached_book.sheetnames]
-        if not selected_sheets:
-            candidates_text = "、".join(f"「{name}」" for name in candidates)
-            raise WorkbookDataError(
-                f"工作簿「{source}」未找到设置的资金工作表：{candidates_text}。"
-            )
-
-        records: list[FundRecord] = []
-        for sheet_name in selected_sheets:
-            worksheet, formula_sheet = _sheet_pair(cached_book, formula_book, source, sheet_name)
-            for row in _validated_rows(
-                worksheet,
-                formula_sheet,
-                _fund_headers(settings),
-                ("付款金额合计（90%）", "应收操作费"),
-                "信容付款日期",
+        candidates = (
+            [settings.funds_sheet.replace("{年份}", str(year)) for year in years]
+            if "{年份}" in settings.funds_sheet
+            else [settings.funds_sheet]
+        )
+        selected = [name for name in candidates if name in cached_book.sheetnames]
+        if not selected:
+            names = "、".join(f"「{name}」" for name in candidates)
+            raise WorkbookDataError(f"工作簿「{path}」未找到设置的资金工作表：{names}。")
+        records = []
+        for sheet_name in selected:
+            cached, formula = _sheet_pair(cached_book, formula_book, path, sheet_name)
+            for values in _validated_rows(
+                cached,
+                formula,
+                settings.fund_fields(),
+                settings.fund_numeric_fields(),
+                settings.fund_date_fields(),
                 settings.funds_header_row,
-                _is_not_disbursed,
             ):
-                payment_date = row["信容付款日期"]
-                if payment_date is None or payment_date == "":
+                present_dates = [
+                    _date(values[field], field)
+                    for field in settings.fund_date_fields()
+                    if values[field] not in (None, "", "未放款")
+                ]
+                if not present_dates:
                     continue
-                channel = _optional_text(row["渠道名称"])
+                for field in settings.fund_numeric_fields():
+                    _decimal(values[field], field)
                 records.append(
                     FundRecord(
-                        channel=channel or "",
-                        payment_date=_date(payment_date, settings.funds_payment_date),
-                        amount=_decimal(row["付款金额合计（90%）"], settings.funds_amount),
-                        operation_fee=_decimal(row["应收操作费"], settings.funds_operation_fee),
+                        _text(values.get(settings.fund_profit.channel_field)) or "",
+                        present_dates[0],
+                        _decimal(
+                            values.get(settings.fund_profit.amount_field),
+                            settings.fund_profit.amount_field,
+                        ),
+                        _decimal(
+                            values.get(settings.fund_profit.operation_fee_field),
+                            settings.fund_profit.operation_fee_field,
+                        ),
+                        values,
                     )
                 )
         return records
