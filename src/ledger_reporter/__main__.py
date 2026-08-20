@@ -4,7 +4,8 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from ledger_reporter.app_paths import app_data_dir
+from ledger_reporter import __version__
+from ledger_reporter.app_paths import app_cache_dir, app_data_dir
 from ledger_reporter.io.source_settings import load_source_settings
 from ledger_reporter.services.history import HistoryRepository
 from ledger_reporter.services.report_service import ReportService
@@ -90,7 +91,12 @@ def main() -> int:
         return 1
     try:
         service = ReportService(repository, settings)
-        window = MainWindow(service, settings_path)
+        window = MainWindow(
+            service,
+            settings_path,
+            current_version=__version__,
+            update_cache_dir=app_cache_dir() / "updates",
+        )
         window.resize(820, 520)
         window.show()
         smoke_ready_file = os.getenv("LEDGER_REPORTER_SMOKE_READY_FILE")

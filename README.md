@@ -1,6 +1,6 @@
 # 台账报表生成器
 
-这是一个完全离线的 macOS 桌面应用，用两份 XLSX 台账生成“经营汇总”和“自营项目周报”，并可导出为一个 Excel 工作簿或两张 PNG 图片。打包后的应用包含 Python 运行环境，使用者无需另行安装 Python。
+这是一个本地运行的 macOS 桌面应用，用两份 XLSX 台账生成“经营汇总”和“自营项目周报”，并可导出为一个 Excel 工作簿或两张 PNG 图片。打包后的应用包含 Python 运行环境，使用者无需另行安装 Python。生成报表不联网；仅检查或下载新版本时访问 GitHub Releases。
 
 ## 输入工作簿
 
@@ -48,6 +48,8 @@ macOS 安装包由 macOS 构建，不在 Windows 上伪造。当前 DMG 未签�
 
 应用菜单中的“卸载台账报表生成器…”会删除应用本身，以及 Application Support 数据、缓存、偏好设置、日志和临时数据。已经导出到用户自选位置的 Excel/PNG 不会被删除。
 
+应用在 macOS 启动后会后台检查 GitHub Releases，也可在“应用”菜单中点击“检查更新…”。发现新版本后，程序只在用户同意时下载当前芯片对应的 DMG，完成 SHA-256 校验后打开安装包；是否替换旧应用仍由用户在 macOS 中确认操作。
+
 ## 开发和测试
 
 项目要求 Python 3.12。在 Windows PowerShell 中：
@@ -82,3 +84,5 @@ TARGET_ARCH="$(uname -m)" bash scripts/build_macos.sh
 ```
 
 脚本会运行全量测试、生成 `.icns`、构建 PyInstaller `.app`、执行打包应用启动冒烟测试、创建 DMG 并生成 SHA-256 文件。GitHub Actions 也会分别构建 Apple 芯片和 Intel 版本；Windows 只验证代码和配置，不能替代真实 macOS 构建验收。
+
+发布时先同步 `pyproject.toml` 和 `src/ledger_reporter/__init__.py` 中的版本号，再推送同版本标签，例如 `v0.2.0`。标签会触发两个原生 macOS 构建，并将两份 DMG 和两份 `.sha256` 文件发布到对应的 GitHub Release；应用的自动更新直接读取该 Release。

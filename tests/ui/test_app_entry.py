@@ -171,9 +171,18 @@ def test_smoke_ready_marker_is_written_after_window_processes_events(
             return 0
 
     class SmokeWindow:
-        def __init__(self, received_service, settings_path: Path) -> None:
+        def __init__(
+            self,
+            received_service,
+            settings_path: Path,
+            *,
+            current_version: str,
+            update_cache_dir: Path,
+        ) -> None:
             captured["window_service"] = received_service
             captured["window_settings_path"] = settings_path
+            captured["current_version"] = current_version
+            captured["update_cache_dir"] = update_cache_dir
 
         def resize(self, _width: int, _height: int) -> None:
             events.append("resize")
@@ -202,6 +211,7 @@ def test_smoke_ready_marker_is_written_after_window_processes_events(
         return service
 
     monkeypatch.setattr(app_entry, "app_data_dir", fake_app_data_dir)
+    monkeypatch.setattr(app_entry, "app_cache_dir", lambda: tmp_path / "cache", raising=False)
     monkeypatch.setattr(app_entry, "HistoryRepository", fake_repository)
     monkeypatch.setattr(app_entry, "load_source_settings", fake_load_settings, raising=False)
     monkeypatch.setattr(app_entry, "ReportService", fake_report_service)
@@ -217,3 +227,5 @@ def test_smoke_ready_marker_is_written_after_window_processes_events(
     assert captured["service_settings"] is settings
     assert captured["window_service"] is service
     assert captured["window_settings_path"] == data_dir / "source-fields.json"
+    assert captured["current_version"] == app_entry.__version__
+    assert captured["update_cache_dir"] == tmp_path / "cache" / "updates"

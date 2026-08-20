@@ -1,7 +1,10 @@
+import subprocess
+import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer
 from PySide6.QtGui import QCloseEvent, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
@@ -11,23 +14,31 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QStyle,
     QVBoxLayout,
     QWidget,
 )
 
-from ledger_reporter.app_paths import resource_path
+from ledger_reporter import __version__
+from ledger_reporter.app_paths import app_cache_dir, resource_path
 from ledger_reporter.domain.models import ReportBundle, SourceInspection
 from ledger_reporter.exporters.excel import export_excel
 from ledger_reporter.exporters.png import export_pngs
 from ledger_reporter.io.source_settings import save_source_settings
+from ledger_reporter.services.app_updates import ReleaseUpdate, check_for_update, download_update
 from ledger_reporter.ui.fonts import ui_font
 from ledger_reporter.ui.preview_dialog import PreviewDialog
 from ledger_reporter.ui.source_picker import SourcePicker
 from ledger_reporter.ui.source_settings_dialog import SourceSettingsDialog
 from ledger_reporter.ui.uninstall_dialog import UninstallDialog
-from ledger_reporter.ui.workers import GenerationWorker, ValidationWorker
+from ledger_reporter.ui.workers import (
+    GenerationWorker,
+    UpdateCheckWorker,
+    UpdateDownloadWorker,
+    ValidationWorker,
+)
 from ledger_reporter.uninstall import default_uninstall_targets
 
 APP_STYLESHEET = """
@@ -187,6 +198,12 @@ class MainWindow(QMainWindow):
         self,
         report_service: object,
         source_settings_path: Path | None = None,
+        *,
+        current_version: str = __version__,
+        update_cache_dir: Path | None = None,
+        update_checker: Callable[[str], ReleaseUpdate | None] = check_for_update,
+        update_downloader: Callable[..., Path] = download_update,
+        auto_check_updates: bool | None = None,
     ) -> None:
         super().__init__()
         self.report_service = report_service
@@ -197,6 +214,16 @@ class MainWindow(QMainWindow):
         self.validation_worker: ValidationWorker | None = None
         self.generation_thread: QThread | None = None
         self.generation_worker: GenerationWorker | None = None
+        self.current_version = current_version
+        self.update_cache_dir = update_cache_dir or app_cache_dir() / "updates"
+        self.update_checker = update_checker
+        self.update_downloader = update_downloader
+        self.update_check_thread: QThread | None = None
+        self.update_check_worker: UpdateCheckWorker | None = None
+        self.update_check_manual = False
+        self.update_download_thread: QThread | None = None
+        self.update_download_worker: UpdateDownloadWorker | None = None
+        self.update_progress: QProgressDialog | None = None
 
         self.setWindowTitle("台账报表生成器")
         self.setMinimumSize(720, 520)
@@ -237,6 +264,9 @@ class MainWindow(QMainWindow):
 
         self.uninstall_targets = default_uninstall_targets()
         self.application_menu = self.menuBar().addMenu("应用")
+        self.update_action = self.application_menu.addAction("检查更新…")
+        self.update_action.triggered.connect(lambda: self.start_update_check(manual=True))
+        self.application_menu.addSeparator()
         self.uninstall_action = self.application_menu.addAction("卸载台账报表生成器…")
         self.uninstall_action.setEnabled(self.uninstall_targets is not None)
         self.uninstall_action.triggered.connect(self.open_uninstall_dialog)
@@ -351,6 +381,9 @@ class MainWindow(QMainWindow):
         self.preview_button.clicked.connect(self.open_preview)
         self.excel_button.clicked.connect(self.export_excel_file)
         self.png_button.clicked.connect(self.export_png_files)
+
+        if auto_check_updates if auto_check_updates is not None else sys.platform == "darwin":
+            QTimer.singleShot(0, lambda: self.start_update_check(manual=False))
 
     @staticmethod
     def _period_card(label: str) -> tuple[QFrame, QLabel]:
@@ -526,6 +559,114 @@ class MainWindow(QMainWindow):
         self.generation_thread = None
         self._restore_idle_controls()
 
+    def start_update_check(self, manual: bool = False) -> None:
+        if self.update_check_thread is not None or self.update_download_thread is not None:
+            return
+        self.update_check_manual = manual
+        self.update_action.setEnabled(False)
+        self.update_check_thread = QThread(self)
+        self.update_check_worker = UpdateCheckWorker(self.update_checker, self.current_version)
+        self.update_check_worker.moveToThread(self.update_check_thread)
+        self.update_check_thread.started.connect(self.update_check_worker.run)
+        self.update_check_worker.succeeded.connect(self.on_update_check_succeeded)
+        self.update_check_worker.failed.connect(self.on_update_check_failed)
+        self.update_check_worker.finished.connect(self.update_check_thread.quit)
+        self.update_check_worker.finished.connect(self.update_check_worker.deleteLater)
+        self.update_check_thread.finished.connect(self.update_check_thread.deleteLater)
+        self.update_check_thread.finished.connect(self.on_update_check_finished)
+        self.update_check_thread.start()
+
+    def on_update_check_succeeded(self, update: ReleaseUpdate | None) -> None:
+        if update is None:
+            if self.update_check_manual:
+                QMessageBox.information(self, "检查更新", "当前已是最新版。")
+            return
+        message = f"发现新版本 {update.version}，是否立即下载？"
+        if update.notes.strip():
+            message += f"\n\n{update.notes.strip()}"
+        if (
+            QMessageBox.question(
+                self,
+                "发现新版本",
+                message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
+            self.start_update_download(update)
+
+    def on_update_check_failed(self, message: str) -> None:
+        if self.update_check_manual:
+            QMessageBox.warning(self, "检查更新失败", message)
+
+    def on_update_check_finished(self) -> None:
+        self.update_check_worker = None
+        self.update_check_thread = None
+        self.update_action.setEnabled(self.update_download_thread is None)
+
+    def start_update_download(self, update: ReleaseUpdate) -> None:
+        if self.update_download_thread is not None:
+            return
+        self.update_action.setEnabled(False)
+        self.update_progress = QProgressDialog("正在下载更新…", "取消", 0, 0, self)
+        self.update_progress.setWindowTitle("下载更新")
+        self.update_progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self.update_progress.setMinimumDuration(0)
+        self.update_progress.setAutoClose(False)
+        self.update_download_thread = QThread(self)
+        self.update_download_worker = UpdateDownloadWorker(
+            self.update_downloader, update, self.update_cache_dir
+        )
+        self.update_download_worker.moveToThread(self.update_download_thread)
+        self.update_download_thread.started.connect(self.update_download_worker.run)
+        self.update_download_worker.progress.connect(self.on_update_download_progress)
+        self.update_download_worker.succeeded.connect(self.on_update_download_succeeded)
+        self.update_download_worker.failed.connect(self.on_update_download_failed)
+        self.update_download_worker.finished.connect(self.update_download_thread.quit)
+        self.update_download_worker.finished.connect(self.update_download_worker.deleteLater)
+        self.update_download_thread.finished.connect(self.update_download_thread.deleteLater)
+        self.update_download_thread.finished.connect(self.on_update_download_finished)
+        self.update_progress.canceled.connect(
+            self.update_download_worker.cancel,
+            Qt.ConnectionType.DirectConnection,
+        )
+        self.update_download_thread.start()
+
+    def on_update_download_progress(self, received: int, total: int) -> None:
+        if self.update_progress is None:
+            return
+        if total > 0:
+            self.update_progress.setRange(0, total)
+            self.update_progress.setValue(received)
+        else:
+            self.update_progress.setRange(0, 0)
+
+    def on_update_download_succeeded(self, path: Path) -> None:
+        if self.update_progress is not None:
+            self.update_progress.close()
+        self.open_update_installer(Path(path))
+
+    def on_update_download_failed(self, message: str) -> None:
+        if self.update_progress is not None:
+            self.update_progress.close()
+        if message != "更新下载已取消。":
+            QMessageBox.warning(self, "更新下载失败", message)
+
+    def on_update_download_finished(self) -> None:
+        self.update_download_worker = None
+        self.update_download_thread = None
+        self.update_progress = None
+        self.update_action.setEnabled(self.update_check_thread is None)
+
+    def open_update_installer(self, path: Path) -> None:
+        try:
+            if sys.platform != "darwin":
+                raise OSError("更新安装包只能在 macOS 上打开。")
+            subprocess.run(["open", str(path)], check=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            QMessageBox.warning(self, "无法打开更新", str(exc) or exc.__class__.__name__)
+
     def open_preview(self) -> None:
         if self.bundle is not None:
             PreviewDialog(self.bundle, self).exec()
@@ -593,8 +734,14 @@ class MainWindow(QMainWindow):
             UninstallDialog(self.uninstall_targets, self).exec()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self._background_task_running():
+        if self._background_task_running() or self._update_task_running():
             self.status_label.setText("任务完成后即可关闭")
             event.ignore()
             return
         super().closeEvent(event)
+
+    def _update_task_running(self) -> bool:
+        return any(
+            thread is not None and thread.isRunning()
+            for thread in (self.update_check_thread, self.update_download_thread)
+        )

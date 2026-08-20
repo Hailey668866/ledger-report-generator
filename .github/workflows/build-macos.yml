@@ -39,3 +39,27 @@ jobs:
             dist/台账报表生成器-${{ matrix.arch }}.dmg
             dist/台账报表生成器-${{ matrix.arch }}.dmg.sha256
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download native installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ledger-report-generator-macos-*
+          path: release
+          merge-multiple: true
+      - name: Publish release attachments
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release/台账报表生成器-arm64.dmg
+            release/台账报表生成器-arm64.dmg.sha256
+            release/台账报表生成器-x86_64.dmg
+            release/台账报表生成器-x86_64.dmg.sha256

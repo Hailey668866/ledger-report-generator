@@ -128,6 +128,24 @@ def test_ci_builds_and_uploads_separate_native_intel_and_apple_silicon_artifacts
     assert "if-no-files-found: error" in workflow
 
 
+def test_tag_build_publishes_both_installers_and_checksums_to_github_release() -> None:
+    workflow = _read(".github/workflows/build-macos.yml")
+
+    assert "contents: write" in workflow
+    assert "release:" in workflow
+    assert "needs: build" in workflow
+    assert "startsWith(github.ref, 'refs/tags/v')" in workflow
+    assert "actions/download-artifact@v4" in workflow
+    assert "softprops/action-gh-release@v2" in workflow
+    for attachment in (
+        "台账报表生成器-arm64.dmg",
+        "台账报表生成器-arm64.dmg.sha256",
+        "台账报表生成器-x86_64.dmg",
+        "台账报表生成器-x86_64.dmg.sha256",
+    ):
+        assert f"release/{attachment}" in workflow
+
+
 def test_install_guide_covers_unsigned_install_dock_and_uninstall_behavior() -> None:
     guide = _read("docs/INSTALL_MACOS.md")
 

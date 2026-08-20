@@ -14,6 +14,12 @@ def app_data_dir() -> Path:
     return Path(os.getenv("LOCALAPPDATA") or Path.home()) / APP_ID
 
 
+def app_cache_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / APP_ID
+    return Path(os.getenv("LOCALAPPDATA") or Path.home()) / APP_ID / "cache"
+
+
 def resource_path(name: str) -> Path:
     if hasattr(sys, "_MEIPASS"):
         base = Path(sys._MEIPASS) / "ledger_reporter"
