@@ -203,7 +203,7 @@ class MainWindow(QMainWindow):
         update_cache_dir: Path | None = None,
         update_checker: Callable[[str], ReleaseUpdate | None] = check_for_update,
         update_downloader: Callable[..., Path] = download_update,
-        auto_check_updates: bool | None = None,
+        auto_check_updates: bool = False,
     ) -> None:
         super().__init__()
         self.report_service = report_service
@@ -382,7 +382,7 @@ class MainWindow(QMainWindow):
         self.excel_button.clicked.connect(self.export_excel_file)
         self.png_button.clicked.connect(self.export_png_files)
 
-        if auto_check_updates if auto_check_updates is not None else sys.platform == "darwin":
+        if auto_check_updates:
             QTimer.singleShot(0, lambda: self.start_update_check(manual=False))
 
     @staticmethod

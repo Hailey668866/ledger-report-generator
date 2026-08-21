@@ -178,11 +178,13 @@ def test_smoke_ready_marker_is_written_after_window_processes_events(
             *,
             current_version: str,
             update_cache_dir: Path,
+            auto_check_updates: bool,
         ) -> None:
             captured["window_service"] = received_service
             captured["window_settings_path"] = settings_path
             captured["current_version"] = current_version
             captured["update_cache_dir"] = update_cache_dir
+            captured["auto_check_updates"] = auto_check_updates
 
         def resize(self, _width: int, _height: int) -> None:
             events.append("resize")
@@ -191,6 +193,7 @@ def test_smoke_ready_marker_is_written_after_window_processes_events(
             events.append("show")
 
     monkeypatch.setenv("LEDGER_REPORTER_SMOKE_READY_FILE", str(marker))
+    monkeypatch.setattr(app_entry.sys, "platform", "darwin")
     monkeypatch.setattr(app_entry, "QApplication", SmokeApplication)
 
     def fake_app_data_dir() -> Path:
@@ -229,3 +232,4 @@ def test_smoke_ready_marker_is_written_after_window_processes_events(
     assert captured["window_settings_path"] == data_dir / "source-fields.json"
     assert captured["current_version"] == app_entry.__version__
     assert captured["update_cache_dir"] == tmp_path / "cache" / "updates"
+    assert captured["auto_check_updates"] is True

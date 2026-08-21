@@ -96,6 +96,7 @@ def main() -> int:
             settings_path,
             current_version=__version__,
             update_cache_dir=app_cache_dir() / "updates",
+            auto_check_updates=sys.platform == "darwin",
         )
         window.resize(820, 520)
         window.show()
