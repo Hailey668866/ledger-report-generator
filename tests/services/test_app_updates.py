@@ -66,6 +66,36 @@ def test_check_selects_current_architecture_assets() -> None:
     )
 
 
+def test_check_uses_asset_label_when_github_sanitizes_unicode_name() -> None:
+    payload = {
+        "tag_name": "v0.2.2",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": "-arm64.dmg",
+                "label": "台账报表生成器-arm64.dmg",
+                "browser_download_url": "https://x/arm.dmg",
+            },
+            {
+                "name": "-arm64.dmg.sha256",
+                "label": "台账报表生成器-arm64.dmg.sha256",
+                "browser_download_url": "https://x/arm.sha",
+            },
+        ],
+    }
+
+    update = check_for_update(
+        "0.2.1",
+        machine="arm64",
+        opener=lambda *_args, **_kwargs: Response(json.dumps(payload).encode()),
+    )
+
+    assert update is not None
+    assert update.dmg_url == "https://x/arm.dmg"
+    assert update.checksum_url == "https://x/arm.sha"
+
+
 def test_check_returns_none_for_current_or_prerelease() -> None:
     payload = {"tag_name": "v0.1.0", "draft": False, "prerelease": False, "assets": []}
 

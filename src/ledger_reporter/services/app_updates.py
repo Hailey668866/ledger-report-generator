@@ -88,7 +88,7 @@ def check_for_update(
     if latest + (0,) * (width - len(latest)) <= current + (0,) * (width - len(current)):
         return None
     names = {
-        str(asset.get("name")): str(asset.get("browser_download_url"))
+        str(asset.get("label") or asset.get("name")): str(asset.get("browser_download_url"))
         for asset in payload.get("assets", [])
         if isinstance(asset, dict)
     }
