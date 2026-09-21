@@ -1,4 +1,5 @@
 .artifact-analysis/
+.release/
 .superpowers/
 .worktrees/
 .venv/
